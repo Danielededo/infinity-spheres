@@ -190,11 +190,18 @@ Pages on every push to `main`, and can also be run by hand from
 **Actions → Deploy to GitHub Pages → Run workflow**. This repository is already configured, so pushing
 to `main` is all it takes.
 
-Forking it needs one step from a repository admin: **Settings → Pages → Build and deployment → Source:
-GitHub Actions**. That step cannot be automated — `actions/configure-pages` accepts an `enablement`
-option, but creating a Pages site requires repo-admin rights that a workflow's `GITHUB_TOKEN` does not
-carry even when granted `pages: write`; it fails with *"Create Pages site failed. Error: Resource not
-accessible by integration"*.
+Forking it needs two steps from a repository admin, both in the repository settings:
+
+1. **Settings → Pages → Build and deployment → Source: GitHub Actions.** This cannot be automated —
+   `actions/configure-pages` accepts an `enablement` option, but creating a Pages site requires
+   repo-admin rights that a workflow's `GITHUB_TOKEN` does not carry even when granted `pages: write`;
+   it fails with *"Create Pages site failed. Error: Resource not accessible by integration"*.
+2. **Settings → Environments → `github-pages` → Deployment branches and tags** must allow `main`.
+   Enabling Pages creates that environment with a branch policy naming whatever branch was default at
+   the time, so if the default branch is renamed afterwards the policy goes stale and every run is
+   refused. The symptom is distinctive: the job fails in about two seconds having been assigned no
+   runner, with no steps and no logs at all, because it is rejected by the environment gate before it
+   ever starts — as opposed to a failure *inside* a step, which produces logs.
 
 ## Licence
 
