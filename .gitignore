@@ -1,0 +1,16 @@
+# dipendenze (il progetto non ne ha bisogno: Three.js arriva da CDN)
+node_modules/
+package-lock.json
+
+# log
+*.log
+npm-debug.log*
+
+# sistema operativo
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
