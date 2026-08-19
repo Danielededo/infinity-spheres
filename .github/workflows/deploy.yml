@@ -26,12 +26,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # enablement lets this step switch Pages on (build type: GitHub Actions)
-      # the first time it runs, so the repository needs no manual setup.
+      # No `enablement: true` here on purpose: creating the Pages site needs
+      # repo-admin rights, which the workflow's GITHUB_TOKEN does not have even
+      # with `pages: write` (it answers "Create Pages site failed. Error:
+      # Resource not accessible by integration"). Pages has to be switched on
+      # once by hand; after that this step just reads the existing config.
       - name: Setup Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
