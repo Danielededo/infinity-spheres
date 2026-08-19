@@ -189,7 +189,8 @@ Constraints worth respecting:
 Pages on every push to `main`, and can also be run by hand from
 **Actions → Deploy to GitHub Pages → Run workflow**.
 
-One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+The `Setup Pages` step passes `enablement: true`, so the first run switches Pages on by itself — there
+is no manual repository setup to do.
 
 ## Licence
 

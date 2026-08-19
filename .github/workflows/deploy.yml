@@ -26,8 +26,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # enablement lets this step switch Pages on (build type: GitHub Actions)
+      # the first time it runs, so the repository needs no manual setup.
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
