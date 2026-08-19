@@ -187,13 +187,14 @@ Constraints worth respecting:
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publishes the repository to GitHub
 Pages on every push to `main`, and can also be run by hand from
-**Actions → Deploy to GitHub Pages → Run workflow**.
+**Actions → Deploy to GitHub Pages → Run workflow**. This repository is already configured, so pushing
+to `main` is all it takes.
 
-One-time setup, which has to be done by a repository admin: **Settings → Pages → Build and deployment →
-Source: GitHub Actions**. This step cannot be automated — `actions/configure-pages` has an `enablement`
-option, but creating a Pages site requires repo-admin rights that the workflow's `GITHUB_TOKEN` does not
-have even with `pages: write`; it fails with *"Create Pages site failed. Error: Resource not accessible
-by integration"*. Once Pages is on, pushes to `main` deploy on their own.
+Forking it needs one step from a repository admin: **Settings → Pages → Build and deployment → Source:
+GitHub Actions**. That step cannot be automated — `actions/configure-pages` accepts an `enablement`
+option, but creating a Pages site requires repo-admin rights that a workflow's `GITHUB_TOKEN` does not
+carry even when granted `pages: write`; it fails with *"Create Pages site failed. Error: Resource not
+accessible by integration"*.
 
 ## Licence
 
