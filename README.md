@@ -186,7 +186,7 @@ Constraints worth respecting:
 ## Deploying to GitHub Pages
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publishes the repository to GitHub
-Pages on every push to the default branch, and can also be run by hand from
+Pages on every push to `main`, and can also be run by hand from
 **Actions → Deploy to GitHub Pages → Run workflow**.
 
 One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
