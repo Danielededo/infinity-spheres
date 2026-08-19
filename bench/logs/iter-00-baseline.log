@@ -1,0 +1,24 @@
+instrumented three 0.169.0: build/three.module.js
+
+[1/4] render metrics @ 320x200, 200 frames after 40 warmup
+      ... 8/40 frames, 0s elapsed, 666.7 fps
+      ... 57/256 frames, 1s elapsed, 46.4 fps
+      ... 157/256 frames, 136s elapsed, 1.2 fps
+      FRAME_P95=2332.7ms p50=581.8ms cpu_p95=2329.8ms (0.85 fps)  DRAWCALLS=67  TRIS=404940
+      PROGRAMS=12 GEOMETRIES=15 TEXTURES=6  ALLOC_FRAME=0 (max 0)
+[2/4] heap: usedJSHeapSize after forced GC, growth between frame 60 and 460
+      ... 8/60 frames, 0s elapsed, 571.4 fps
+      ... 64/460 frames, 1s elapsed, 60.2 fps
+      ... 170/460 frames, 124s elapsed, 1.4 fps
+      ... 273/460 frames, 250s elapsed, 1.1 fps
+      ... 373/460 frames, 371s elapsed, 1.0 fps
+      HEAP_MB=10.455  HEAP_GROWTH_MB=0.131
+[3/4] physics: PHYS_MS over 2000 steps, gates over 90s simulated
+      PHYS_MS=0.1236  ALLOC_PER_STEP=0
+      ESCAPED=0  ENERGY_DRIFT=0%  LOBE_CHANGES=148
+[4/4] screenshots: 3 poses at simulation step 300
+      wrote reference bench/ref/front.png
+      wrote reference bench/ref/oblique.png
+      wrote reference bench/ref/close.png
+
+wrote bench/baseline.json
