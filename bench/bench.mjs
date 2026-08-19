@@ -370,6 +370,24 @@ async function newPage() {
   return { page, errors };
 }
 
+/**
+ * Put the simulation into a state that depends on nothing but the seed.
+ *
+ * The page starts its own loop as soon as it loads and advances the physics by
+ * wall-clock delta, so by the time the harness gets control an arbitrary amount
+ * of simulated time has already passed. Pausing first freezes that, pressing R
+ * rebuilds the marbles from the seeded RNG, and the fixed-size steps after that
+ * are reproducible. Order matters: pause before reset, or the loop keeps
+ * stepping the fresh state by wall-clock delta.
+ */
+async function freezeAt(page, steps) {
+  await page.keyboard.press('Space');            // pause physics
+  await page.waitForTimeout(150);
+  await page.keyboard.press('KeyR');             // rebuild marbles, seeded
+  await page.waitForTimeout(150);
+  await page.evaluate((n) => { for (let i = 0; i < n; i++) window.__scene.step(1 / 60); }, steps);
+}
+
 /** Pin the camera and stop anything that moves on its own. */
 async function pose(page, p) {
   await page.evaluate(({ pos }) => {
@@ -411,6 +429,7 @@ log(`\n[1/4] render metrics @ ${CFG.width}x${CFG.height}, ${CFG.frames} frames a
 {
   const { page, errors } = await newPage();
   await pose(page, POSES[0]);
+  await freezeAt(page, CFG.shotFrame);
   await waitFrames(page, CFG.warmupFrames);
   const mark = await page.evaluate(() => window.__bench.frames);
   await waitFrames(page, mark + CFG.frames);
@@ -532,17 +551,15 @@ log(`[4/4] screenshots: ${POSES.length} poses at simulation step ${CFG.shotFrame
   for (const p of POSES) {
     const { page } = await newPage();
     await pose(page, p);
-    await page.keyboard.press('Space');                 // freeze physics
     await page.keyboard.press('KeyH');                  // HUD out of the frame
-    await page.waitForTimeout(150);
-    await page.evaluate((n) => {
+    await freezeAt(page, CFG.shotFrame);
+    await page.evaluate(() => {
       const B = window.__bench;
-      for (let i = 0; i < n; i++) window.__scene.step(1 / 60);
       // Stop the animation loop, then draw exactly one frame. Without this the
       // screenshot competes with an unthrottled rAF and times out.
       B.renderer.setAnimationLoop(null);
       B.renderer.render(B.scene, B.camera);
-    }, CFG.shotFrame);
+    });
     await page.waitForTimeout(400);
     const shot = await page.screenshot({ timeout: 120000, animations: 'disabled' });
     const refPath = path.join(REF_DIR, `${p.name}.png`);

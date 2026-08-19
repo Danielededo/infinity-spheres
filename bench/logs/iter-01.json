@@ -12,18 +12,18 @@
     "gateSeconds": 90,
     "seed": 20260819,
     "browser": "chromium/swiftshader",
-    "three": "0.169.0",
+    "three": "0.180.0",
     "poses": [
       "front",
       "oblique",
       "close"
     ]
   },
-  "FRAME_P95": 2527.2,
-  "FRAME_P50": 302.5,
-  "FRAME_MEAN": 1102.623,
-  "FRAME_CPU_P95": 2454.4,
-  "FPS_EFFECTIVE": 0.91,
+  "FRAME_P95": 1213.1,
+  "FRAME_P50": 703.2,
+  "FRAME_MEAN": 1038.099,
+  "FRAME_CPU_P95": 1211.3,
+  "FPS_EFFECTIVE": 0.96,
   "DRAWCALLS": 67,
   "TRIS": 404940,
   "PROGRAMS": 12,
@@ -31,24 +31,24 @@
   "TEXTURES": 6,
   "ALLOC_FRAME": 0,
   "ALLOC_FRAME_MAX": 0,
-  "frame_samples": 202,
-  "HEAP_MB": 10.19,
-  "HEAP_GROWTH_MB": 0.039,
-  "PHYS_MS": 0.1164,
+  "frame_samples": 201,
+  "HEAP_MB": 11.675,
+  "HEAP_GROWTH_MB": 0.291,
+  "PHYS_MS": 0.1195,
   "ALLOC_PER_STEP": 0,
   "ESCAPED": 0,
-  "WORST_EXCURSION": 1.9984014443252818e-15,
+  "WORST_EXCURSION": 1.7763568394002505e-15,
   "ENERGY_DRIFT_PCT": 0,
-  "LOBE_CHANGES": 173,
-  "VMAX": 37.05,
+  "LOBE_CHANGES": 145,
+  "VMAX": 45.83,
   "SSIM": {
-    "front": 1,
-    "oblique": 1,
-    "close": 1
+    "front": 0.87792,
+    "oblique": 0.89898,
+    "close": 0.60449
   },
-  "SSIM_MIN": 1,
+  "SSIM_MIN": 0.60449,
   "git": {
     "head": "8e014faf607af810d27fd97ab680dc69e10cbdcd"
   },
-  "timestamp": "2026-08-19T23:37:02.212Z"
+  "timestamp": "2026-08-19T23:01:49.754Z"
 }
