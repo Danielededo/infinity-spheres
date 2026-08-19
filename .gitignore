@@ -1,16 +1,16 @@
-# dipendenze (il progetto non ne ha bisogno: Three.js arriva da CDN)
+# dependencies (the project needs none: Three.js comes from a CDN)
 node_modules/
 package-lock.json
 
-# log
+# logs
 *.log
 npm-debug.log*
 
-# sistema operativo
+# OS
 .DS_Store
 Thumbs.db
 
-# editor
+# editors
 .vscode/
 .idea/
 *.swp

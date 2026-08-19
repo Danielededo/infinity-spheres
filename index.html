@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Infinity Spheres — Lemniscata di Bernoulli</title>
+<title>Infinity Spheres — Marbles in a Lemniscate Tube</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%2305070c'/%3E%3Ctext x='16' y='23' font-size='22' text-anchor='middle' fill='%237cc7ff'%3E%E2%88%9E%3C/text%3E%3C/svg%3E" />
-<meta name="description" content="30 sfere physical che scorrono lungo una lemniscata di Bernoulli con collisioni elastiche, in Three.js." />
+<meta name="description" content="A closed glass tube swept along a Bernoulli lemniscate, with 30 coloured marbles bouncing inside it. Three.js." />
 <style>
   :root {
     --bg: #05070c;
@@ -42,32 +42,22 @@
   }
   #hud.hidden { opacity: 0; transform: translateY(-8px); pointer-events: none; }
 
-  #hud h1 {
-    margin: 0 0 2px;
-    font-size: 14px;
-    font-weight: 650;
-    letter-spacing: .01em;
-  }
+  #hud h1 { margin: 0 0 2px; font-size: 14px; font-weight: 650; letter-spacing: .01em; }
   #hud h1 span { color: var(--accent); }
   #hud .sub { margin: 0 0 12px; color: var(--muted); font-size: 11.5px; }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    margin-bottom: 12px;
-  }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px; }
   .stat {
-    padding: 7px 8px;
+    padding: 7px 6px;
     border: 1px solid var(--stroke);
     border-radius: 9px;
     background: rgba(255, 255, 255, 0.03);
   }
-  .stat b { display: block; font-size: 14px; font-weight: 620; font-variant-numeric: tabular-nums; }
-  .stat i { font-style: normal; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+  .stat b { display: block; font-size: 13px; font-weight: 620; font-variant-numeric: tabular-nums; }
+  .stat i { font-style: normal; color: var(--muted); font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; }
 
   .row { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
-  .row label { flex: 0 0 66px; color: var(--muted); font-size: 11.5px; }
+  .row label { flex: 0 0 52px; color: var(--muted); font-size: 11.5px; }
   input[type="range"] { flex: 1; accent-color: var(--accent); min-width: 0; }
   .row output { flex: 0 0 40px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; }
 
@@ -113,34 +103,35 @@
 <body>
 
 <div id="hud">
-  <h1>Lemniscata di <span>Bernoulli</span> ∞</h1>
-  <p class="sub">30 sfere physical, collisioni elastiche 1D lungo la curva.</p>
+  <h1>Bernoulli <span>Lemniscate</span> Tube ∞</h1>
+  <p class="sub">A glass tube swept along an ∞, with 30 marbles loose inside.</p>
 
   <div class="stats">
-    <div class="stat"><b id="s-count">0</b><i>sfere</i></div>
-    <div class="stat"><b id="s-hits">0</b><i>urti</i></div>
+    <div class="stat"><b id="s-count">0</b><i>marbles</i></div>
+    <div class="stat"><b id="s-hits">0</b><i>impacts</i></div>
+    <div class="stat"><b id="s-wall">0</b><i>wall</i></div>
     <div class="stat"><b id="s-fps">0</b><i>fps</i></div>
   </div>
 
   <div class="row">
-    <label for="speed">Velocità</label>
+    <label for="speed">Speed</label>
     <input id="speed" type="range" min="0" max="3" step="0.05" value="1" />
     <output id="speed-out">1.00×</output>
   </div>
 
   <div class="btns">
-    <button id="btn-pause" aria-pressed="false">Pausa</button>
-    <button id="btn-path" aria-pressed="true">Percorso</button>
-    <button id="btn-rotate" aria-pressed="true">Rotazione</button>
+    <button id="btn-pause" aria-pressed="false">Pause</button>
+    <button id="btn-glass" aria-pressed="true">Glass</button>
+    <button id="btn-spin" aria-pressed="true">Spin</button>
     <button id="btn-reset">Reset</button>
   </div>
 
   <p class="keys">
-    <kbd>spazio</kbd> pausa · <kbd>P</kbd> percorso · <kbd>A</kbd> rotazione · <kbd>R</kbd> reset · <kbd>H</kbd> HUD
+    <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>H</kbd> hide
   </p>
 </div>
 
-<p id="note">Trascina per orbitare · rotella per zoom · tasto destro per pan</p>
+<p id="note">Drag to orbit · scroll to zoom · right-drag to pan</p>
 
 <script type="importmap">
 {
@@ -156,56 +147,116 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 /* ------------------------------------------------------------------ *
- * Parametri della simulazione
+ * Configuration
  * ------------------------------------------------------------------ */
 const CONF = {
-  spheres: 30,       // numero di sfere
-  a: 20,             // semi-larghezza della lemniscata
-  lift: 3.6,         // separazione verticale dei due rami all'incrocio
-  rMin: 0.55,        // raggio minimo
-  rMax: 1.25,        // raggio massimo
-  vMin: 2.0,         // velocità iniziale minima (unità/s)
-  vMax: 7.5,         // velocità iniziale massima (unità/s)
-  restitution: 1.0,  // 1 = urto perfettamente elastico
+  marbles: 30,        // how many spheres live inside the tube
+  a: 20,              // lemniscate half-width
+  tubeRadius: 2.4,    // R — inner radius of the glass tube
+  rMin: 0.55,         // smallest marble radius   (must stay well under R)
+  rMax: 1.15,         // largest marble radius
+  speedMin: 5.0,      // initial speed range, world units per second
+  speedMax: 12.0,
+  swirl: 0.35,        // transverse share of the initial velocity
+  restitution: 1.0,   // 1 = perfectly elastic, for marbles and for the wall
+  tubularSegments: 1000,
+  radialSegments: 56,
 };
 
+const R = CONF.tubeRadius;
+
 /* ------------------------------------------------------------------ *
- * Curva: lemniscata di Bernoulli
+ * The spine: a Bernoulli lemniscate in the XY plane
  *
- *   x = a·cos t / (1 + sin²t)
- *   z = a·sin t·cos t / (1 + sin²t)
+ *   x(t) = a·cos t / (1 + sin²t)
+ *   y(t) = a·sin t·cos t / (1 + sin²t)
  *
- * La curva piana si auto-interseca nell'origine (t = π/2 e t = 3π/2):
- * il termine y = lift·sin t separa i due rami in verticale, così le
- * sfere non si compenetrano nel punto di incrocio e la figura resta
- * un ∞ perfetto visto dall'alto.
+ * The curve genuinely self-intersects at the origin (t = π/2 and t = 3π/2),
+ * and that is wanted here: the two tube branches merge into an open crossing
+ * that marbles fly through, swapping lobes.
  * ------------------------------------------------------------------ */
 class LemniscateCurve extends THREE.Curve {
-  constructor(a = CONF.a, lift = CONF.lift) {
+  constructor(a = CONF.a) {
     super();
     this.a = a;
-    this.lift = lift;
   }
   getPoint(t, target = new THREE.Vector3()) {
     const u = t * Math.PI * 2;
     const s = Math.sin(u), c = Math.cos(u);
     const d = 1 + s * s;
-    return target.set(this.a * c / d, this.lift * s, this.a * s * c / d);
+    return target.set(this.a * c / d, this.a * s * c / d, 0);
   }
 }
 
 const curve = new LemniscateCurve();
-curve.arcLengthDivisions = 4000;          // LUT densa: getPointAt() ~ arco costante
-const LENGTH = curve.getLength();          // lunghezza totale del circuito
+curve.arcLengthDivisions = 4000;        // dense LUT => getPointAt() is arc-length based
+const LENGTH = curve.getLength();
 
 /* ------------------------------------------------------------------ *
- * Renderer / scena / camera
+ * Polyline sampling of the spine, used by the wall solver.
+ *
+ * Sampled with getPointAt() so the samples are evenly spaced along the arc,
+ * which keeps the nearest-point search uniformly accurate. Sample index i
+ * corresponds to u = i / SAMPLES — the same parametrisation TubeGeometry
+ * uses, so the mesh and the collision surface agree.
+ * ------------------------------------------------------------------ */
+const SAMPLE_STEP = 0.35;
+const SAMPLES = Math.ceil(LENGTH / SAMPLE_STEP);
+const spine = new Float32Array(SAMPLES * 3);
+{
+  const p = new THREE.Vector3();
+  for (let i = 0; i < SAMPLES; i++) {
+    curve.getPointAt(i / SAMPLES, p);
+    spine[3 * i] = p.x; spine[3 * i + 1] = p.y; spine[3 * i + 2] = p.z;
+  }
+}
+
+/* Nearest point on the spine, over the *whole* curve.
+ *
+ * Taking the minimum over both branches is what makes the crossing solid-free:
+ * the tube is the union of all disks of radius R around the spine, so a point
+ * counts as inside when it is close enough to ANY part of the curve. Near the
+ * origin that union is the open X-shaped junction.
+ *
+ * Brute force over ~300 samples for 30 marbles costs ~0.2 ms/frame, so there
+ * is no need for a spatial index here. */
+const near = { d: 0, qx: 0, qy: 0, qz: 0 };
+function nearestOnSpine(px, py, pz) {
+  let best = 0, bestD2 = Infinity;
+  for (let i = 0; i < SAMPLES; i++) {
+    const k = 3 * i;
+    const dx = px - spine[k], dy = py - spine[k + 1], dz = pz - spine[k + 2];
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < bestD2) { bestD2 = d2; best = i; }
+  }
+  // Refine by projecting onto the two chords touching the winning sample:
+  // turns the sampling error from O(step) into O(step²·curvature).
+  let refD2 = Infinity;
+  for (let s = 0; s < 2; s++) {
+    const j = s === 0 ? (best - 1 + SAMPLES) % SAMPLES : best;
+    const k = 3 * j, k2 = 3 * ((j + 1) % SAMPLES);
+    const ax = spine[k], ay = spine[k + 1], az = spine[k + 2];
+    const bx = spine[k2] - ax, by = spine[k2 + 1] - ay, bz = spine[k2 + 2] - az;
+    const den = bx * bx + by * by + bz * bz;
+    let t = den > 0 ? ((px - ax) * bx + (py - ay) * by + (pz - az) * bz) / den : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const cx = ax + bx * t, cy = ay + by * t, cz = az + bz * t;
+    const dx = px - cx, dy = py - cy, dz = pz - cz;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < refD2) { refD2 = d2; near.qx = cx; near.qy = cy; near.qz = cz; }
+  }
+  near.d = Math.sqrt(refD2);
+  return near;
+}
+
+/* ------------------------------------------------------------------ *
+ * Renderer, scene, camera
  * ------------------------------------------------------------------ */
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.18;
+renderer.toneMappingExposure = 1.15;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
@@ -214,20 +265,20 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05070c, 0.0085);
 
 const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 500);
-camera.position.set(30, 18, 40);
+camera.position.set(6, 12, 48);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
-controls.minDistance = 8;
-controls.maxDistance = 140;
+controls.minDistance = 6;
+controls.maxDistance = 150;
 controls.autoRotate = true;
-controls.autoRotateSpeed = 0.45;
-controls.target.set(0, 0, 0);
+controls.autoRotateSpeed = 0.4;
 
 /* ------------------------------------------------------------------ *
- * Ambiente: equirettangolare procedurale -> PMREM
- * Serve al materiale physical per riflessi credibili senza asset esterni.
+ * Environment: a procedural equirectangular map through PMREM.
+ * Glass and polished marbles need something to reflect and refract, and this
+ * costs nothing to download.
  * ------------------------------------------------------------------ */
 function makeGradientEnvTexture() {
   const c = document.createElement('canvas');
@@ -235,19 +286,18 @@ function makeGradientEnvTexture() {
   const g = c.getContext('2d');
 
   const sky = g.createLinearGradient(0, 0, 0, c.height);
-  sky.addColorStop(0.00, '#9fc4ff');
-  sky.addColorStop(0.35, '#33507f');
+  sky.addColorStop(0.00, '#a8caff');
+  sky.addColorStop(0.35, '#355384');
   sky.addColorStop(0.55, '#0d1424');
   sky.addColorStop(1.00, '#04060b');
   g.fillStyle = sky;
   g.fillRect(0, 0, c.width, c.height);
 
-  // sorgenti luminose morbide, per far vivere i riflessi speculari
   const blobs = [
-    [0.20, 0.22, 210, 'rgba(255,246,220,0.95)'],
-    [0.66, 0.16, 170, 'rgba(150,205,255,0.85)'],
+    [0.20, 0.20, 220, 'rgba(255,247,224,0.98)'],
+    [0.66, 0.15, 180, 'rgba(155,208,255,0.88)'],
     [0.88, 0.44, 150, 'rgba(255,140,190,0.55)'],
-    [0.42, 0.72, 220, 'rgba(90,255,220,0.30)'],
+    [0.42, 0.72, 230, 'rgba(90,255,220,0.32)'],
   ];
   for (const [x, y, r, col] of blobs) {
     const rg = g.createRadialGradient(x * c.width, y * c.height, 0, x * c.width, y * c.height, r);
@@ -268,164 +318,304 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 pmrem.compileEquirectangularShader();
 scene.environment = pmrem.fromEquirectangular(envSource).texture;
 scene.background = envSource;
-scene.backgroundIntensity = 0.32;
-scene.backgroundBlurriness = 0.45;
+scene.backgroundIntensity = 0.38;
+scene.backgroundBlurriness = 0.5;
 pmrem.dispose();
 
 /* ------------------------------------------------------------------ *
- * Luci
+ * Lights
  * ------------------------------------------------------------------ */
-scene.add(new THREE.HemisphereLight(0x9dc4ff, 0x0a0d16, 0.75));
+scene.add(new THREE.HemisphereLight(0x9dc4ff, 0x0a0d16, 0.7));
 
-const key = new THREE.DirectionalLight(0xfff3dd, 2.6);
-key.position.set(26, 34, 18);
+const key = new THREE.DirectionalLight(0xfff3dd, 2.5);
+key.position.set(24, 32, 26);
 key.castShadow = true;
 key.shadow.mapSize.set(1024, 1024);
 key.shadow.bias = -0.0008;
 key.shadow.normalBias = 0.02;
-const sc = key.shadow.camera;
-sc.left = -34; sc.right = 34; sc.top = 34; sc.bottom = -34;
-sc.near = 1; sc.far = 120;
+Object.assign(key.shadow.camera, { left: -34, right: 34, top: 34, bottom: -34, near: 1, far: 130 });
 scene.add(key);
 
-const rim = new THREE.DirectionalLight(0x88bcff, 1.1);
-rim.position.set(-22, 8, -26);
+const rim = new THREE.DirectionalLight(0x88bcff, 1.2);
+rim.position.set(-24, 6, -22);
 scene.add(rim);
 
-const warm = new THREE.PointLight(0xff8ab8, 90, 90, 2);
-warm.position.set(-CONF.a * 0.75, 6, 0);
+const warm = new THREE.PointLight(0xff8ab8, 120, 90, 2);
+warm.position.set(-CONF.a * 0.7, 0, 10);
 scene.add(warm);
 
-const cool = new THREE.PointLight(0x63f7d6, 90, 90, 2);
-cool.position.set(CONF.a * 0.75, -6, 0);
+const cool = new THREE.PointLight(0x63f7d6, 120, 90, 2);
+cool.position.set(CONF.a * 0.7, 0, -10);
 scene.add(cool);
 
 /* ------------------------------------------------------------------ *
- * Piano d'appoggio (raccoglie le ombre, sfuma nella nebbia)
+ * Floor — catches the marble shadows and fades out into the fog
  * ------------------------------------------------------------------ */
 const floor = new THREE.Mesh(
-  new THREE.CircleGeometry(70, 72),
-  new THREE.MeshStandardMaterial({ color: 0x0a0e18, roughness: 0.72, metalness: 0.1 })
+  new THREE.CircleGeometry(200, 72),
+  new THREE.MeshStandardMaterial({ color: 0x080b14, roughness: 0.85, metalness: 0.1 })
 );
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = -10;
+floor.position.y = -15;
 floor.receiveShadow = true;
 scene.add(floor);
 
 /* ------------------------------------------------------------------ *
- * Il percorso, come tubo sottile
+ * The glass solid: a circle of radius R swept along the lemniscate.
+ *
+ * Where the two branches cross, each one's wall runs through the inside of
+ * the other. Those faces are removed so the junction becomes a real opening
+ * instead of a pane of glass across the marbles' path — a cheap stand-in for
+ * a CSG union, done on the triangle level.
  * ------------------------------------------------------------------ */
-const pathMesh = new THREE.Mesh(
-  new THREE.TubeGeometry(curve, 900, 0.055, 10, true),
-  new THREE.MeshBasicMaterial({ color: 0x6fb4ff, transparent: true, opacity: 0.4 })
+// A face belongs to the branch at parameter uOwn; samples closer than this
+// window along the curve are its own neighbourhood, not the other branch. The
+// two crossing branches are half a turn apart (u = 0.25 and u = 0.75), so any
+// window well below 0.5 separates them.
+const WINDOW = 0.08;
+
+/* Which spine samples sit close enough to a *far* part of the curve for the two
+ * tubes to overlap at all. A face can only be buried inside the other branch if
+ * its own sample is in this set, so everything outside it skips the test — that
+ * turns the trim from 112k faces × 300 samples into a few thousand × a few. */
+function findCrossingSamples() {
+  const flag = new Uint8Array(SAMPLES);
+  const reach = 2 * R + 2 * SAMPLE_STEP;          // conservative: both radii + slack
+  for (let i = 0; i < SAMPLES; i++) {
+    const ki = 3 * i;
+    for (let j = i + 1; j < SAMPLES; j++) {
+      let du = Math.abs(i / SAMPLES - j / SAMPLES);
+      if (du > 0.5) du = 1 - du;
+      if (du < WINDOW) continue;
+      const kj = 3 * j;
+      const dx = spine[ki] - spine[kj], dy = spine[ki + 1] - spine[kj + 1], dz = spine[ki + 2] - spine[kj + 2];
+      if (dx * dx + dy * dy + dz * dz < reach * reach) { flag[i] = 1; flag[j] = 1; }
+    }
+  }
+  // dilate by a couple of samples, since a face's own u falls between samples
+  const out = flag.slice();
+  for (let i = 0; i < SAMPLES; i++) {
+    if (!flag[i]) continue;
+    for (let d = -2; d <= 2; d++) out[(i + d + SAMPLES) % SAMPLES] = 1;
+  }
+  const list = [];
+  for (let i = 0; i < SAMPLES; i++) if (out[i]) list.push(i);
+  return { flag: out, list };
+}
+
+const crossing = findCrossingSamples();
+
+function openCrossing(geo, tubularSegments, radialSegments) {
+  const pos = geo.attributes.position;
+  const idx = geo.index.array;
+  const stride = radialSegments + 1;
+  const kept = [];
+  let dropped = 0;
+
+  for (let f = 0; f < idx.length; f += 3) {
+    const a = idx[f], b = idx[f + 1], c = idx[f + 2];
+    const uOwn = Math.floor(a / stride) / tubularSegments;
+    const ownSample = Math.round(uOwn * SAMPLES) % SAMPLES;
+
+    if (crossing.flag[ownSample]) {
+      const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
+      const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
+      const cz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+
+      let insideOther = false;
+      for (const i of crossing.list) {
+        let du = Math.abs(i / SAMPLES - uOwn);
+        if (du > 0.5) du = 1 - du;
+        if (du < WINDOW) continue;
+        const k = 3 * i;
+        const dx = cx - spine[k], dy = cy - spine[k + 1], dz = cz - spine[k + 2];
+        if (dx * dx + dy * dy + dz * dz < R * R) { insideOther = true; break; }
+      }
+      if (insideOther) { dropped++; continue; }
+    }
+
+    kept.push(a, b, c);
+  }
+
+  geo.setIndex(kept);
+  return dropped;
+}
+
+const tubeGeo = new THREE.TubeGeometry(curve, CONF.tubularSegments, R, CONF.radialSegments, true);
+const droppedFaces = openCrossing(tubeGeo, CONF.tubularSegments, CONF.radialSegments);
+
+const glass = new THREE.Mesh(
+  tubeGeo,
+  new THREE.MeshPhysicalMaterial({
+    color: 0xffffff,
+    metalness: 0,
+    roughness: 0.03,
+    transmission: 1,
+    thickness: 1.0,
+    ior: 1.5,
+    clearcoat: 1,
+    clearcoatRoughness: 0.03,
+    specularIntensity: 1,
+    attenuationColor: new THREE.Color(0xcfe9ff),
+    attenuationDistance: 60,
+    side: THREE.DoubleSide,
+    transparent: true,
+    depthWrite: false,
+    envMapIntensity: 1.6,
+  })
 );
-scene.add(pathMesh);
+scene.add(glass);
 
 /* ------------------------------------------------------------------ *
- * Le sfere: ogni sfera è una "perlina" vincolata alla curva.
- * Stato = ascissa curvilinea normalizzata u ∈ [0,1) + velocità v (unità/s).
+ * The marbles
  * ------------------------------------------------------------------ */
-const geometry = new THREE.SphereGeometry(1, 32, 24);
-const beads = [];
-let hits = 0;
+const marbleGeo = new THREE.SphereGeometry(1, 32, 24);
+const marbles = [];
+let hits = 0, wallHits = 0;
 
-const wrap01 = (u) => u - Math.floor(u);
 const rand = (min, max) => min + Math.random() * (max - min);
+const wrap01 = (u) => u - Math.floor(u);
 
-function buildSpheres() {
-  for (const b of beads) {
-    scene.remove(b.mesh);
-    b.mesh.material.dispose();
+function buildMarbles() {
+  for (const m of marbles) {
+    scene.remove(m.mesh);
+    m.mesh.material.dispose();
   }
-  beads.length = 0;
-  hits = 0;
+  marbles.length = 0;
+  hits = 0; wallHits = 0;
 
-  const n = CONF.spheres;
+  const n = CONF.marbles;
+  const centre = new THREE.Vector3();
+  const tangent = new THREE.Vector3();
+  const side = new THREE.Vector3();
+  const up = new THREE.Vector3();
+
   for (let i = 0; i < n; i++) {
     const r = rand(CONF.rMin, CONF.rMax);
+    const u = i / n;
 
-    // tonalità distribuite su tutto il cerchio cromatico, con saturazione
-    // e luminosità variate: colori diversi *e* tonalità diverse
     const hue = wrap01(i / n + rand(-0.02, 0.02));
-    const color = new THREE.Color().setHSL(hue, rand(0.55, 1.0), rand(0.42, 0.66));
+    const color = new THREE.Color().setHSL(hue, rand(0.6, 1.0), rand(0.44, 0.64));
 
     const material = new THREE.MeshPhysicalMaterial({
       color,
-      metalness: rand(0.05, 0.62),
-      roughness: rand(0.06, 0.5),
-      clearcoat: rand(0.3, 1.0),
-      clearcoatRoughness: rand(0.02, 0.25),
-      sheen: rand(0.0, 0.5),
-      sheenColor: color.clone().offsetHSL(0.08, 0, 0.15),
+      metalness: rand(0.05, 0.55),
+      roughness: rand(0.05, 0.35),
+      clearcoat: rand(0.4, 1.0),
+      clearcoatRoughness: rand(0.02, 0.2),
       envMapIntensity: 1.4,
     });
 
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(marbleGeo, material);
     mesh.scale.setScalar(r);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     scene.add(mesh);
 
-    beads.push({
-      mesh,
-      r,
-      m: r * r * r,                                   // massa ∝ volume
-      u: i / n,                                       // partenza equispaziata
-      v: rand(CONF.vMin, CONF.vMax) * (Math.random() < 0.5 ? -1 : 1),
-    });
-  }
-  document.getElementById('s-count').textContent = String(beads.length);
-  placeMeshes();
-}
+    // Start on the spine, evenly spaced: the arc gap (L/n ≈ 3.5) is wider than
+    // the largest pair of radii, so nothing starts overlapping.
+    curve.getPointAt(u, centre);
+    curve.getTangentAt(u, tangent);
+    side.set(-tangent.y, tangent.x, 0).normalize();
+    up.set(0, 0, 1);
 
-const tmp = new THREE.Vector3();
-function placeMeshes() {
-  for (const b of beads) b.mesh.position.copy(curve.getPointAt(b.u, tmp));
+    // Mostly along the tube, with a transverse kick so they also work the wall.
+    const speed = rand(CONF.speedMin, CONF.speedMax) * (Math.random() < 0.5 ? -1 : 1);
+    const vel = tangent.clone().multiplyScalar(speed)
+      .addScaledVector(side, rand(-1, 1) * CONF.swirl * Math.abs(speed))
+      .addScaledVector(up, rand(-1, 1) * CONF.swirl * Math.abs(speed));
+
+    marbles.push({ mesh, r, m: r * r * r, pos: centre.clone(), vel });
+    mesh.position.copy(centre);
+  }
+  document.getElementById('s-count').textContent = String(marbles.length);
 }
 
 /* ------------------------------------------------------------------ *
- * Collisioni elastiche
- *
- * Le sfere sono vincolate a una curva chiusa: il contatto avviene solo
- * tra vicini in ascissa curvilinea, quindi il problema è un urto 1D.
- *   v1' = ((m1-m2)·v1 + 2·m2·v2) / (m1+m2)
- *   v2' = ((m2-m1)·v2 + 2·m1·v1) / (m1+m2)
- * Con restitution = 1 quantità di moto ed energia cinetica si conservano.
+ * Marble against marble: 3D elastic impulse along the line of centres.
+ *   j = -(1 + e)·(v_rel · n) / (1/m₁ + 1/m₂)
  * ------------------------------------------------------------------ */
-const order = [];
-function solveCollisions() {
-  order.length = 0;
-  for (let i = 0; i < beads.length; i++) order.push(i);
-  order.sort((i, j) => beads[i].u - beads[j].u);
+function solveMarbles() {
+  const e = CONF.restitution;
+  for (let i = 0; i < marbles.length; i++) {
+    const A = marbles[i];
+    for (let j = i + 1; j < marbles.length; j++) {
+      const B = marbles[j];
+      const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y, dz = B.pos.z - A.pos.z;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      const minDist = A.r + B.r;
+      if (dist >= minDist || dist < 1e-9) continue;
 
-  for (let k = 0; k < order.length; k++) {
-    const A = beads[order[k]];
-    const B = beads[order[(k + 1) % order.length]];
-    if (A === B) break;
+      const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+      const vn = (B.vel.x - A.vel.x) * nx + (B.vel.y - A.vel.y) * ny + (B.vel.z - A.vel.z) * nz;
 
-    let du = B.u - A.u;
-    if (du < 0) du += 1;                  // coppia che scavalca u = 0
-    const gap = du * LENGTH - (A.r + B.r);
-    if (gap >= 0) continue;
+      if (vn < 0) {                                   // only when closing in
+        const imp = -(1 + e) * vn / (1 / A.m + 1 / B.m);
+        A.vel.x -= nx * imp / A.m; A.vel.y -= ny * imp / A.m; A.vel.z -= nz * imp / A.m;
+        B.vel.x += nx * imp / B.m; B.vel.y += ny * imp / B.m; B.vel.z += nz * imp / B.m;
+        hits++;
+      }
 
-    const mSum = A.m + B.m;
-
-    // scambio di velocità solo se si stanno avvicinando
-    if (B.v - A.v < 0) {
-      const vA = ((A.m - B.m) * A.v + 2 * B.m * B.v) / mSum;
-      const vB = ((B.m - A.m) * B.v + 2 * A.m * A.v) / mSum;
-      const e = CONF.restitution;
-      const vCm = (A.m * A.v + B.m * B.v) / mSum;
-      A.v = vCm + (vA - vCm) * e;
-      B.v = vCm + (vB - vCm) * e;
-      hits++;
+      const overlap = minDist - dist;
+      const wA = B.m / (A.m + B.m), wB = A.m / (A.m + B.m);
+      A.pos.x -= nx * overlap * wA; A.pos.y -= ny * overlap * wA; A.pos.z -= nz * overlap * wA;
+      B.pos.x += nx * overlap * wB; B.pos.y += ny * overlap * wB; B.pos.z += nz * overlap * wB;
     }
-
-    // separazione posizionale, ripartita in modo inversamente proporzionale alla massa
-    const overlap = -gap / LENGTH;
-    A.u = wrap01(A.u - overlap * (B.m / mSum));
-    B.u = wrap01(B.u + overlap * (A.m / mSum));
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Marble against the inner wall.
+ *
+ * The marble's centre must stay within R - r of the spine. Past that, the
+ * velocity is mirrored about the radial normal (centre − nearest spine point)
+ * and the centre is placed back exactly on the limit surface, so a marble can
+ * never end a frame outside the glass.
+ * ------------------------------------------------------------------ */
+function solveWall() {
+  const e = CONF.restitution;
+  for (const m of marbles) {
+    const p = m.pos;
+    const n = nearestOnSpine(p.x, p.y, p.z);
+    const limit = R - m.r;
+    if (n.d <= limit) continue;
+
+    const nx = (p.x - n.qx) / n.d, ny = (p.y - n.qy) / n.d, nz = (p.z - n.qz) / n.d;
+    const vn = m.vel.x * nx + m.vel.y * ny + m.vel.z * nz;
+    if (vn > 0) {                                     // only when heading out
+      m.vel.x -= (1 + e) * vn * nx;
+      m.vel.y -= (1 + e) * vn * ny;
+      m.vel.z -= (1 + e) * vn * nz;
+      wallHits++;
+    }
+    p.set(n.qx + nx * limit, n.qy + ny * limit, n.qz + nz * limit);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Integration
+ * ------------------------------------------------------------------ */
+function step(dt) {
+  const h = dt * timeScale;
+  if (h <= 0) return;
+
+  // Elastic impacts between unequal masses hand a lot of speed to the light
+  // marbles — they pass 35 units/s. The step is split so no marble moves more
+  // than a fraction of the smallest radius per sub-step, otherwise a fast pair
+  // would swap places instead of colliding.
+  let vMax = 0;
+  for (const m of marbles) vMax = Math.max(vMax, m.vel.length());
+  const sub = Math.min(16, Math.max(1, Math.ceil((h * vMax) / (0.45 * CONF.rMin))));
+  const hs = h / sub;
+
+  for (let s = 0; s < sub; s++) {
+    for (const m of marbles) m.pos.addScaledVector(m.vel, hs);
+    // Twice: separating a pair can nudge one into the wall, and vice versa.
+    solveMarbles(); solveWall();
+    solveMarbles(); solveWall();
+  }
+
+  for (const m of marbles) m.mesh.position.copy(m.pos);
 }
 
 /* ------------------------------------------------------------------ *
@@ -434,60 +624,38 @@ function solveCollisions() {
 const clock = new THREE.Clock();
 const ui = {
   hits: document.getElementById('s-hits'),
+  wall: document.getElementById('s-wall'),
   fps: document.getElementById('s-fps'),
 };
 let paused = false;
 let timeScale = 1;
 let fpsAcc = 0, fpsFrames = 0;
 
-function step(dt) {
-  const h = dt * timeScale;
-  if (h <= 0) return;
-
-  // Gli urti elastici tra masse diverse redistribuiscono l'energia: una sfera
-  // leggera può superare i 35 unità/s. Il passo viene suddiviso perché lo
-  // spostamento per sotto-passo resti inferiore a mezzo raggio minimo,
-  // altrimenti a velocità alte le sfere si attraversano invece di urtarsi.
-  let vMax = 0;
-  for (const b of beads) vMax = Math.max(vMax, Math.abs(b.v));
-  const sub = Math.min(16, Math.max(1, Math.ceil((h * vMax) / (0.5 * CONF.rMin))));
-  const hs = h / sub;
-
-  for (let s = 0; s < sub; s++) {
-    for (const b of beads) b.u = wrap01(b.u + (b.v * hs) / LENGTH);
-
-    // due passate: con 30 corpi ravvicinati stabilizza le catene di urti
-    solveCollisions();
-    solveCollisions();
-  }
-
-  placeMeshes();
-}
-
 renderer.setAnimationLoop(() => {
   const raw = clock.getDelta();
-  const dt = Math.min(raw, 1 / 30);   // clamp: niente salti dopo un blur di tab
+  const dt = Math.min(raw, 1 / 30);        // clamp so a hidden tab cannot jump the sim
 
   if (!paused) step(dt);
   controls.update();
   renderer.render(scene, camera);
 
-  // il contatore usa il tempo reale, non quello clampato: altrimenti su una
-  // macchina lenta resterebbe inchiodato a 30 fps qualunque sia la resa
+  // Real elapsed time, not the clamped step: otherwise a slow machine would
+  // still report a confident 30 fps.
   fpsAcc += raw; fpsFrames++;
   if (fpsAcc >= 0.5) {
     ui.fps.textContent = String(Math.round(fpsFrames / fpsAcc));
-    ui.hits.textContent = hits.toLocaleString('it-IT');
+    ui.hits.textContent = hits.toLocaleString('en-US');
+    ui.wall.textContent = wallHits.toLocaleString('en-US');
     fpsAcc = 0; fpsFrames = 0;
   }
 });
 
 /* ------------------------------------------------------------------ *
- * Controlli UI
+ * UI
  * ------------------------------------------------------------------ */
 const btnPause = document.getElementById('btn-pause');
-const btnPath = document.getElementById('btn-path');
-const btnRotate = document.getElementById('btn-rotate');
+const btnGlass = document.getElementById('btn-glass');
+const btnSpin = document.getElementById('btn-spin');
 const btnReset = document.getElementById('btn-reset');
 const hud = document.getElementById('hud');
 const speed = document.getElementById('speed');
@@ -495,22 +663,22 @@ const speedOut = document.getElementById('speed-out');
 
 function togglePause() {
   paused = !paused;
-  btnPause.textContent = paused ? 'Riprendi' : 'Pausa';
+  btnPause.textContent = paused ? 'Resume' : 'Pause';
   btnPause.setAttribute('aria-pressed', String(paused));
 }
-function togglePath() {
-  pathMesh.visible = !pathMesh.visible;
-  btnPath.setAttribute('aria-pressed', String(pathMesh.visible));
+function toggleGlass() {
+  glass.visible = !glass.visible;
+  btnGlass.setAttribute('aria-pressed', String(glass.visible));
 }
-function toggleRotate() {
+function toggleSpin() {
   controls.autoRotate = !controls.autoRotate;
-  btnRotate.setAttribute('aria-pressed', String(controls.autoRotate));
+  btnSpin.setAttribute('aria-pressed', String(controls.autoRotate));
 }
 
 btnPause.addEventListener('click', togglePause);
-btnPath.addEventListener('click', togglePath);
-btnRotate.addEventListener('click', toggleRotate);
-btnReset.addEventListener('click', buildSpheres);
+btnGlass.addEventListener('click', toggleGlass);
+btnSpin.addEventListener('click', toggleSpin);
+btnReset.addEventListener('click', buildMarbles);
 
 speed.addEventListener('input', () => {
   timeScale = Number(speed.value);
@@ -521,9 +689,9 @@ addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   switch (e.code) {
     case 'Space': e.preventDefault(); togglePause(); break;
-    case 'KeyP': togglePath(); break;
-    case 'KeyA': toggleRotate(); break;
-    case 'KeyR': buildSpheres(); break;
+    case 'KeyG': toggleGlass(); break;
+    case 'KeyA': toggleSpin(); break;
+    case 'KeyR': buildMarbles(); break;
     case 'KeyH': hud.classList.toggle('hidden'); break;
   }
 });
@@ -534,7 +702,10 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-buildSpheres();
+buildMarbles();
+
+// exposed for the automated checks in the repository's test notes
+window.__scene = { curve, marbles, nearestOnSpine, step, R, LENGTH, SAMPLES, droppedFaces, CONF };
 </script>
 </body>
 </html>

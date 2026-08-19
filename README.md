@@ -1,147 +1,196 @@
 # Infinity Spheres ∞
 
-Una scena [Three.js](https://threejs.org/) in un **singolo file `index.html`**: 30 sfere solide, ognuna
-di colore e tonalità differenti, scorrono lungo una **lemniscata di Bernoulli** urtandosi in modo
-perfettamente elastico. Illuminazione e materiali `MeshPhysicalMaterial`, `OrbitControls`, animazione
-in loop continuo.
+A [Three.js](https://threejs.org/) scene in a **single `index.html`**: a closed **glass tube swept
+along a Bernoulli lemniscate**, with 30 marbles of different colours and shades loose inside it. The
+marbles fly freely in 3D, bounce elastically off each other and off the inner wall of the tube, and
+pass through the open crossing at the centre of the ∞ to swap lobes.
 
 **Demo:** https://danielededo.github.io/infinity-spheres/
 
-Nessuna build, nessuna dipendenza da installare: Three.js arriva da CDN tramite un `importmap`.
+No build step and nothing to install — Three.js is loaded from a CDN through an `importmap`.
 
 ---
 
-## Come funziona
+## How it works
 
-### La curva
+### The spine
 
-Le sfere sono vincolate alla lemniscata di Bernoulli, in forma parametrica:
+The tube is a circle of radius `R = 2.4` swept along a Bernoulli lemniscate lying in the XY plane:
 
 ```
 x(t) = a·cos t / (1 + sin²t)
-z(t) = a·sin t·cos t / (1 + sin²t)
-y(t) = lift·sin t
+y(t) = a·sin t·cos t / (1 + sin²t)
+z(t) = 0
 ```
 
-con `t ∈ [0, 2π)`, `a = 20` e `lift = 3.6`.
+with `t ∈ [0, 2π)` and `a = 20`. The spine is a `THREE.Curve` subclass with
+`arcLengthDivisions = 4000`, so `getPointAt(u)` is arc-length based — the same parametrisation
+`TubeGeometry` uses internally, which keeps the mesh and the collision surface in agreement. The
+spine is **104.88 units** long.
 
-La lemniscata piana si **auto-interseca nell'origine** (per `t = π/2` e `t = 3π/2`): senza correzioni,
-due sfere sui rami opposti si compenetrerebbero nel punto di incrocio. Il termine `y = lift·sin t`
-separa i due rami in verticale — vale `+lift` su un ramo e `−lift` sull'altro — così la curva nello
-spazio 3D non si interseca più, mentre la proiezione sul piano *xz* resta un ∞ perfetto. La distanza
-minima tra rami distanti lungo la curva è **5.05 unità**, il doppio del diametro massimo di una sfera
-(2.50), quindi il passaggio all'incrocio è sempre libero.
+The curve genuinely self-intersects at the origin (at `t = π/2` and `t = 3π/2`), and that is the
+point: the two branches merge into an open junction the marbles fly through.
 
-La curva è una sottoclasse di `THREE.Curve`, con `arcLengthDivisions = 4000`: `getPointAt(u)` restituisce
-punti a **passo di arco costante**, non a passo di parametro costante. Senza questo accorgimento le sfere
-rallenterebbero e accelererebbero artificialmente lungo i lobi. Il circuito misura **≈ 106.0 unità**.
+### The solid
 
-### La fisica
+`TubeGeometry(curve, 1000, R, 56, true)` gives the closed tube. Its material is glass —
+`MeshPhysicalMaterial` with `transmission: 1`, low `roughness`, `ior: 1.5`, `attenuationColor` and
+`side: THREE.DoubleSide` — so you can see the marbles inside, refracted through the wall.
 
-Ogni sfera è una perlina infilata su un filo. Il suo stato è ridotto a due numeri:
+**Opening the crossing.** Where the two branches overlap, each one's wall runs straight through the
+inside of the other, which would leave a pane of glass across the marbles' path. Those faces are
+removed: a triangle is dropped when its centroid lies within `R` of a part of the spine that is more
+than `0.08` (in normalised arc length) away from its own — a triangle-level stand-in for a CSG union.
+6516 of the 112 000 faces get dropped.
 
-- `u` — ascissa curvilinea normalizzata in `[0, 1)`
-- `v` — velocità scalare lungo la curva, in unità/s (il segno dà il verso di marcia)
+That count is easy to check against theory. The lemniscate's tangents at the node are at ±45°, so the
+two branches cross at exactly 90°, and for two perpendicular cylinders of equal radius the wall area
+of each one lying inside the other is the Steinmetz result `8R²`. For both branches that predicts
+`16R² = 92.2` units of area; the 6516 removed faces account for **92.0** — a 0.16% match.
 
-Il vincolo alla curva rende il problema **monodimensionale**: due sfere possono toccarsi solo se sono
-adiacenti in `u`. Ad ogni frame le sfere vengono ordinate per `u` e si controllano le coppie vicine,
-compresa quella che scavalca `u = 0`. Se la distanza d'arco scende sotto `r₁ + r₂` si applica l'urto
-elastico 1D:
+Only spine samples close enough to a distant part of the curve for the tubes to overlap at all are
+considered, so the trim touches a few thousand faces instead of scanning all 112 000 against every
+sample.
+
+### The physics
+
+Each marble is a free body with a position and a 3D velocity — no constraint to the curve, it just
+happens to be trapped in a tube.
+
+**Marble against marble** is an elastic impulse along the line of centres, with mass proportional to
+volume (`m ∝ r³`):
 
 ```
-v₁' = ((m₁ − m₂)·v₁ + 2·m₂·v₂) / (m₁ + m₂)
-v₂' = ((m₂ − m₁)·v₂ + 2·m₁·v₁) / (m₁ + m₂)
+j = −(1 + e)·(v_rel · n) / (1/m₁ + 1/m₂)
+v₁ −= (j/m₁)·n        v₂ += (j/m₂)·n
 ```
 
-con massa proporzionale al volume (`m ∝ r³`). Lo scambio avviene solo se le due sfere si stanno
-effettivamente avvicinando; segue una separazione posizionale ripartita in modo inversamente
-proporzionale alle masse, per evitare che restino incastrate.
+applied only when the pair is actually closing in, followed by a positional split weighted inversely
+by mass.
 
-Su 120 s simulati (≈ 7000 urti) quantità di moto ed energia cinetica si conservano con deriva nulla
-alla sesta cifra decimale: gli urti sono elastici in senso stretto, la simulazione non si smorza né
-esplode.
+**Marble against the wall.** The tube is the set of all points within `R` of the spine, so a marble
+of radius `r` is inside exactly while its centre is within `R − r` of the spine. Each step finds the
+nearest point `q` on the spine; if `d = |centre − q| > R − r`, the velocity is mirrored about the
+radial normal `n = (centre − q)/d` and the centre is placed back exactly on the limit surface:
 
-**Sotto-passi.** Gli urti fra masse diverse redistribuiscono l'energia, e una sfera leggera può superare
-i 35 unità/s. A velocità simili, con un passo di integrazione pieno, una sfera attraverserebbe la vicina
-invece di urtarla. Il passo viene quindi suddiviso in modo che lo spostamento per sotto-passo resti sotto
-mezzo raggio minimo (fino a 16 sotto-passi). Misurato al cursore velocità 3×: senza sotto-passi la
-compenetrazione residua arriva a 1.35 unità (ben visibile), con i sotto-passi resta a 0.10.
+```
+v −= (1 + e)·(v · n)·n
+centre = q + n·(R − r)
+```
 
-### Resa
+Taking the minimum distance over the **whole** curve is what makes the junction work: the tube is a
+*union* of disks, so a point counts as inside when it is close to any part of the spine. Near the
+origin that union is the X-shaped chamber, and the same wall code that keeps marbles in the tube lets
+them cross between lobes with no special case.
 
-- Ambiente equirettangolare **generato a runtime** su `<canvas>` (gradiente + sorgenti luminose morbide)
-  e convertito con `PMREMGenerator`: i materiali physical hanno riflessi credibili senza scaricare HDRI.
-- `MeshPhysicalMaterial` per sfera, con `metalness`, `roughness`, `clearcoat` e `sheen` randomizzati:
-  tutte diverse anche a parità di forma.
-- Tonalità distribuite sull'intero cerchio cromatico (`hue = i/n`), con saturazione e luminosità variate.
-- Luce principale con ombre `PCFSoft`, luce di stacco, due luci puntiformi colorate, nebbia esponenziale.
-- `ACESFilmicToneMapping`, pixel ratio limitato a 2.
+The nearest point comes from a polyline of ~300 evenly spaced samples, then a projection onto the two
+chords touching the winning sample, which turns the sampling error from `O(step)` into
+`O(step²·curvature)`. Brute force over 300 samples for 30 marbles costs about 0.12 ms per frame, so
+there is no spatial index.
 
-## Controlli
+**Sub-steps.** Elastic impacts between unequal masses hand a lot of speed to the light marbles — they
+pass 39 units/s. Each frame is split so that no marble moves more than `0.45·rMin` per sub-step,
+otherwise a fast pair would swap places instead of colliding.
 
-| Azione | Mouse / touch | Tastiera |
+### What was verified
+
+The page exposes `window.__scene` (curve, marbles, `nearestOnSpine`, `step`) so the simulation can be
+audited from the outside without waiting on the renderer. Driving its own `step()` for 90 simulated
+seconds, checking after every frame:
+
+| Check | Result |
+| --- | --- |
+| Marble outside the glass (162 000 centre-vs-wall checks) | worst excursion `1.8e-15` — never |
+| Marbles crossing between lobes | 144 lobe changes |
+| Kinetic energy, `restitution = 1` | drift 0.0000% |
+| Physics cost | 0.12 ms/frame (0.76 ms at the 3× speed setting) |
+
+Two known approximations, both measured:
+
+- `TubeGeometry` is a 56-gon inscribed in the true cylinder, so its flat faces sit at `2.3962`
+  instead of `2.4`. A marble pressed against the analytic wall can therefore poke through the drawn
+  wall by up to `0.0038` units — 0.7% of the smallest marble radius.
+- The junction seam is trimmed per triangle, so at extreme close-up its rim is visibly stepped at the
+  scale of one face (~0.27 units around the circumference). At normal viewing distance it reads clean.
+
+### Rendering
+
+- Equirectangular environment **generated at runtime** on a `<canvas>` (gradient plus soft light
+  blobs) and prefiltered with `PMREMGenerator`: glass and polished marbles get something to reflect
+  and refract without downloading an HDRI.
+- Hues spread over the whole colour wheel (`hue = i/n`), with saturation, lightness, `metalness`,
+  `roughness` and `clearcoat` all varied per marble.
+- Key light with `PCFSoft` shadows, rim light, two coloured point lights, exponential fog,
+  `ACESFilmicToneMapping`, pixel ratio capped at 2.
+- `OrbitControls` with damping and a slow auto-orbit.
+
+## Controls
+
+| Action | Mouse / touch | Keyboard |
 | --- | --- | --- |
-| Orbita | trascina | — |
-| Zoom | rotella / pizzica | — |
-| Pan | tasto destro / due dita | — |
-| Pausa | pulsante **Pausa** | <kbd>spazio</kbd> |
-| Mostra percorso | pulsante **Percorso** | <kbd>P</kbd> |
-| Auto-rotazione | pulsante **Rotazione** | <kbd>A</kbd> |
-| Reset (nuovi colori e velocità) | pulsante **Reset** | <kbd>R</kbd> |
-| Mostra/nascondi HUD | — | <kbd>H</kbd> |
+| Orbit | drag | — |
+| Zoom | scroll / pinch | — |
+| Pan | right-drag / two fingers | — |
+| Pause | **Pause** | <kbd>space</kbd> |
+| Show/hide the glass | **Glass** | <kbd>G</kbd> |
+| Auto-orbit | **Spin** | <kbd>A</kbd> |
+| Reset (new colours and velocities) | **Reset** | <kbd>R</kbd> |
+| Show/hide the HUD | — | <kbd>H</kbd> |
 
-Il cursore **Velocità** scala il tempo da 0 a 3×.
+The **Speed** slider scales time from 0 to 3×.
 
-## Uso in locale
+## Running it locally
 
-Il file usa i moduli ES, quindi va servito via HTTP (aprirlo con `file://` fa fallire il caricamento
-dei moduli da CDN):
+The file uses ES modules, so it has to be served over HTTP — opening it as `file://` breaks the
+module imports:
 
 ```bash
 git clone https://github.com/danielededo/infinity-spheres.git
 cd infinity-spheres
 python3 -m http.server 8000
-# poi apri http://localhost:8000
+# then open http://localhost:8000
 ```
 
-Serve una connessione a Internet per la CDN. Per un uso completamente offline, scarica Three.js
-(`npm i three@0.169.0`) e fai puntare l'`importmap` in `index.html` alla copia locale.
+An internet connection is needed for the CDN. To run fully offline, install Three.js
+(`npm i three@0.169.0`) and point the `importmap` in `index.html` at the local copy.
 
-## Personalizzazione
+## Tuning
 
-I parametri stanno tutti nell'oggetto `CONF` in cima allo script:
+Everything lives in the `CONF` object at the top of the script:
 
 ```js
 const CONF = {
-  spheres: 30,       // numero di sfere
-  a: 20,             // semi-larghezza della lemniscata
-  lift: 3.6,         // separazione verticale dei rami all'incrocio
-  rMin: 0.55,        // raggio minimo
-  rMax: 1.25,        // raggio massimo
-  vMin: 2.0,         // velocità iniziale minima (unità/s)
-  vMax: 7.5,         // velocità iniziale massima (unità/s)
-  restitution: 1.0,  // 1 = urto perfettamente elastico
+  marbles: 30,        // how many spheres live inside the tube
+  a: 20,              // lemniscate half-width
+  tubeRadius: 2.4,    // R — inner radius of the glass tube
+  rMin: 0.55,         // smallest marble radius
+  rMax: 1.15,         // largest marble radius
+  speedMin: 5.0,      // initial speed range, world units per second
+  speedMax: 12.0,
+  swirl: 0.35,        // transverse share of the initial velocity
+  restitution: 1.0,   // 1 = perfectly elastic, for marbles and for the wall
+  tubularSegments: 1000,
+  radialSegments: 56,
 };
 ```
 
-Due vincoli da rispettare:
+Constraints worth respecting:
 
-- **`lift > rMax`**, altrimenti i rami tornano a toccarsi all'incrocio.
-- **`somma dei diametri < lunghezza del circuito`** (≈ `5.24 · a`), altrimenti le sfere non ci stanno
-  e la simulazione parte già compenetrata. Con i valori di default: 30 sfere occupano al massimo
-  ≈ 54 unità su 106 disponibili.
+- **`rMax < tubeRadius`**, obviously — and keeping `rMax` near half of `R` leaves the marbles room to
+  move across the bore instead of being wedged in a queue.
+- **`marbles · 2·rMax < spine length`** (`≈ 5.24 · a`), or the marbles will not fit on the spine at
+  startup and will begin overlapping. With the defaults, 30 marbles need at most 69 of the 104.88
+  available.
+- Dropping `restitution` below 1 makes the impacts lossy: the marbles bleed energy and settle.
 
-Abbassando `restitution` sotto 1 gli urti diventano anelastici: le sfere perdono energia e finiscono
-per accodarsi.
+## Deploying to GitHub Pages
 
-## Deploy su GitHub Pages
-
-Il workflow [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) pubblica il contenuto della
-repository su GitHub Pages ad ogni push sul branch di default, e può essere lanciato a mano da
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) publishes the repository to GitHub
+Pages on every push to the default branch, and can also be run by hand from
 **Actions → Deploy to GitHub Pages → Run workflow**.
 
-Da fare una volta sola: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
 
-## Licenza
+## Licence
 
 [MIT](LICENSE).

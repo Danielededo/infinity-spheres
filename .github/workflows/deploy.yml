@@ -1,8 +1,8 @@
 name: Deploy to GitHub Pages
 
-# Il sito è statico: si pubblica la repository così com'è.
-# Il trigger non filtra i branch, ma il job di deploy gira solo sul branch di
-# default, così il workflow funziona qualunque nome abbia (main, master, ...).
+# The site is static, so the repository is published as-is.
+# The trigger does not filter branches; the deploy job only runs on the default
+# branch, so this works whatever that branch is called (main, master, ...).
 on:
   push:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions:
   pages: write
   id-token: write
 
-# Un deploy alla volta; le run in coda vengono sostituite dalla più recente.
+# One deploy at a time; a queued run is superseded by the newest one.
 concurrency:
   group: pages
   cancel-in-progress: true
