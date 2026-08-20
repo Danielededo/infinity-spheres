@@ -1,6 +1,7 @@
-# dependencies (the project needs none: Three.js comes from a CDN)
+# The page itself needs no dependencies: Three.js comes from a CDN. These are
+# the harness's dev dependencies, and package-lock.json is committed so `npm ci`
+# reproduces them exactly.
 node_modules/
-package-lock.json
 
 # logs
 *.log

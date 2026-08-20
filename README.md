@@ -1,11 +1,18 @@
 # Infinity Spheres ∞
 
+[![CI](https://github.com/Danielededo/infinity-spheres/actions/workflows/ci.yml/badge.svg)](https://github.com/Danielededo/infinity-spheres/actions/workflows/ci.yml)
+[![Deploy](https://github.com/Danielededo/infinity-spheres/actions/workflows/deploy.yml/badge.svg)](https://github.com/Danielededo/infinity-spheres/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![three.js](https://img.shields.io/badge/three.js-0.169.0-black.svg)](https://threejs.org/)
+
 A [Three.js](https://threejs.org/) scene in a **single `index.html`**: a closed **glass tube swept
 along a Bernoulli lemniscate**, with 30 marbles of different colours and shades loose inside it. The
 marbles fly freely in 3D, bounce elastically off each other and off the inner wall of the tube, and
 pass through the open crossing at the centre of the ∞ to swap lobes.
 
-**Demo:** https://danielededo.github.io/infinity-spheres/
+**▶ Live demo: https://danielededo.github.io/infinity-spheres/**
+
+[![The scene](docs/preview.png)](https://danielededo.github.io/infinity-spheres/)
 
 No build step and nothing to install — Three.js is loaded from a CDN through an `importmap`.
 
@@ -182,6 +189,29 @@ Constraints worth respecting:
   startup and will begin overlapping. With the defaults, 30 marbles need at most 69 of the 104.88
   available.
 - Dropping `restitution` below 1 makes the impacts lossy: the marbles bleed energy and settle.
+
+## Development
+
+The page has no dependencies and no build step. The dev dependencies are only for the measurement
+harness in [`bench/`](bench/):
+
+```bash
+npm ci
+npm run serve        # http://localhost:8000
+npm run check        # pinned versions agree, structural tags balance
+npm run bench:gates  # physics non-regression gates, ~1 min
+npm run bench        # full measurement, writes bench/metrics.json, ~12 min
+```
+
+`npm run check` and `npm run bench:gates` are what CI runs on every push and pull request. The gates
+assert that no marble ever ends a step outside the glass, that kinetic energy does not drift with
+`restitution: 1`, and that marbles still cross between lobes. The render metrics are deliberately not
+gated in CI — frame time carries ~27% run-to-run variance on a CPU rasteriser, and the SSIM
+references were rendered on a different machine. See [`bench/README.md`](bench/README.md) for what
+the harness can and cannot resolve.
+
+Three.js is pinned in two places, `index.html`'s importmap and `package.json`'s devDependency. They
+must match; `npm run check` fails if they drift.
 
 ## Deploying to GitHub Pages
 
