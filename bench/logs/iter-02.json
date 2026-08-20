@@ -12,43 +12,43 @@
     "gateSeconds": 90,
     "seed": 20260819,
     "browser": "chromium/swiftshader",
-    "three": "0.180.0",
+    "three": "0.169.0",
     "poses": [
       "front",
       "oblique",
       "close"
     ]
   },
-  "FRAME_P95": 1255.1,
-  "FRAME_P50": 396.2,
-  "FRAME_MEAN": 922.065,
-  "FRAME_CPU_P95": 1110.3,
-  "FPS_EFFECTIVE": 1.08,
+  "FRAME_P95": 880.4,
+  "FRAME_P50": 255.9,
+  "FRAME_MEAN": 483.346,
+  "FRAME_CPU_P95": 767.7,
+  "FPS_EFFECTIVE": 2.07,
   "DRAWCALLS": 67,
-  "TRIS": 404940,
+  "TRIS": 128034,
   "PROGRAMS": 12,
   "GEOMETRIES": 15,
   "TEXTURES": 6,
   "ALLOC_FRAME": 0,
   "ALLOC_FRAME_MAX": 0,
-  "frame_samples": 204,
-  "HEAP_MB": 11.244,
-  "HEAP_GROWTH_MB": -0.046,
-  "PHYS_MS": 0.1179,
+  "frame_samples": 201,
+  "HEAP_MB": 8.228,
+  "HEAP_GROWTH_MB": 0.143,
+  "PHYS_MS": 0.1382,
   "ALLOC_PER_STEP": 0,
   "ESCAPED": 0,
-  "WORST_EXCURSION": 1.9984014443252818e-15,
+  "WORST_EXCURSION": 1.7763568394002505e-15,
   "ENERGY_DRIFT_PCT": 0,
-  "LOBE_CHANGES": 144,
-  "VMAX": 42.25,
+  "LOBE_CHANGES": 131,
+  "VMAX": 41.63,
   "SSIM": {
-    "front": 0.96518,
-    "oblique": 0.97416,
-    "close": 0.9336
+    "front": 0.99873,
+    "oblique": 0.99853,
+    "close": 0.99256
   },
-  "SSIM_MIN": 0.9336,
+  "SSIM_MIN": 0.99256,
   "git": {
     "head": null
   },
-  "timestamp": "2026-08-20T00:11:56.999Z"
+  "timestamp": "2026-08-20T01:31:39.941Z"
 }

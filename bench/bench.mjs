@@ -75,6 +75,11 @@ const POSES = [
 ];
 
 const OUT = arg('out', path.join(HERE, 'metrics.json'));
+// Which phases to run. The SSIM-guided searches (how far the transmission
+// resolution or the tube tessellation can be cut before the picture changes)
+// only need phase 4, which takes about two minutes against twelve for a full
+// run, so the search is affordable.
+const PHASES = new Set(arg('phases', '1,2,3,4').split(',').map(Number));
 const REF_DIR = path.join(HERE, 'ref');
 const WRITE_REF = flag('write-ref');
 
@@ -425,8 +430,8 @@ async function waitFrames(page, n, timeout = 3600000) {
 const results = { config: { ...CFG, three: THREE_VERSION, poses: POSES.map((p) => p.name) } };
 
 /* ---- phase 1: render metrics, fixed pose 0, physics live -------- */
-log(`\n[1/4] render metrics @ ${CFG.width}x${CFG.height}, ${CFG.frames} frames after ${CFG.warmupFrames} warmup`);
-{
+if (PHASES.has(1)) {
+  log(`\n[1/4] render metrics @ ${CFG.width}x${CFG.height}, ${CFG.frames} frames after ${CFG.warmupFrames} warmup`);
   const { page, errors } = await newPage();
   await pose(page, POSES[0]);
   await freezeAt(page, CFG.shotFrame);
@@ -468,8 +473,8 @@ log(`\n[1/4] render metrics @ ${CFG.width}x${CFG.height}, ${CFG.frames} frames a
 }
 
 /* ---- phase 2: heap ---------------------------------------------- */
-log(`[2/4] heap: usedJSHeapSize after forced GC, growth between frame ${CFG.growthFrom} and ${CFG.growthTo}`);
-{
+if (PHASES.has(2)) {
+  log(`[2/4] heap: usedJSHeapSize after forced GC, growth between frame ${CFG.growthFrom} and ${CFG.growthTo}`);
   const { page } = await newPage();
   await pose(page, POSES[0]);
   await waitFrames(page, CFG.growthFrom);
@@ -491,8 +496,8 @@ log(`[2/4] heap: usedJSHeapSize after forced GC, growth between frame ${CFG.grow
 }
 
 /* ---- phase 3: physics in isolation + non-regression gates ------- */
-log(`[3/4] physics: PHYS_MS over ${CFG.physIters} steps, gates over ${CFG.gateSeconds}s simulated`);
-{
+if (PHASES.has(3)) {
+  log(`[3/4] physics: PHYS_MS over ${CFG.physIters} steps, gates over ${CFG.gateSeconds}s simulated`);
   const { page } = await newPage();
   await pose(page, POSES[0]);
   await page.keyboard.press('Space');          // pause the page's own stepping
@@ -545,8 +550,8 @@ log(`[3/4] physics: PHYS_MS over ${CFG.physIters} steps, gates over ${CFG.gateSe
 }
 
 /* ---- phase 4: screenshots + SSIM -------------------------------- */
-log(`[4/4] screenshots: ${POSES.length} poses at simulation step ${CFG.shotFrame}`);
-{
+if (PHASES.has(4)) {
+  log(`[4/4] screenshots: ${POSES.length} poses at simulation step ${CFG.shotFrame}`);
   const ssims = {};
   for (const p of POSES) {
     const { page } = await newPage();
