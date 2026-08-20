@@ -665,10 +665,16 @@ buildSpine();
  * is no need for a spatial index here. */
 const near = { d: 0, qx: 0, qy: 0, qz: 0 };
 function nearestOnSpine(px, py, pz) {
+  // Hoisted into locals on purpose. These are module bindings that a curve
+  // change reassigns, so they are `let`, and this is the innermost loop in the
+  // simulation — 300 to 490 samples per marble per sub-step. Reading a mutable
+  // binding inside the loop leaves the engine unable to treat the count as
+  // fixed or the array as invariant.
+  const sp = spine, n = SAMPLES;
   let best = 0, bestD2 = Infinity;
-  for (let i = 0; i < SAMPLES; i++) {
+  for (let i = 0; i < n; i++) {
     const k = 3 * i;
-    const dx = px - spine[k], dy = py - spine[k + 1], dz = pz - spine[k + 2];
+    const dx = px - sp[k], dy = py - sp[k + 1], dz = pz - sp[k + 2];
     const d2 = dx * dx + dy * dy + dz * dz;
     if (d2 < bestD2) { bestD2 = d2; best = i; }
   }
@@ -676,10 +682,10 @@ function nearestOnSpine(px, py, pz) {
   // turns the sampling error from O(step) into O(step²·curvature).
   let refD2 = Infinity;
   for (let s = 0; s < 2; s++) {
-    const j = s === 0 ? (best - 1 + SAMPLES) % SAMPLES : best;
-    const k = 3 * j, k2 = 3 * ((j + 1) % SAMPLES);
-    const ax = spine[k], ay = spine[k + 1], az = spine[k + 2];
-    const bx = spine[k2] - ax, by = spine[k2 + 1] - ay, bz = spine[k2 + 2] - az;
+    const j = s === 0 ? (best - 1 + n) % n : best;
+    const k = 3 * j, k2 = 3 * ((j + 1) % n);
+    const ax = sp[k], ay = sp[k + 1], az = sp[k + 2];
+    const bx = sp[k2] - ax, by = sp[k2 + 1] - ay, bz = sp[k2 + 2] - az;
     const den = bx * bx + by * by + bz * bz;
     let t = den > 0 ? ((px - ax) * bx + (py - ay) * by + (pz - az) * bz) / den : 0;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
