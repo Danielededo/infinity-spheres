@@ -32,7 +32,7 @@ jobs:
       # Resource not accessible by integration"). Pages has to be switched on
       # once by hand; after that this step just reads the existing config.
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
