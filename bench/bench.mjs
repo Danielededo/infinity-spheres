@@ -335,8 +335,12 @@ const pct = (arr, p) => {
   return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))];
 };
 
+// Use a specific binary when one is present (this sandbox ships Chromium at a
+// fixed path and forbids re-downloading it); otherwise let playwright resolve
+// its own, which is what happens on CI.
+const CHROME = process.env.CHROME_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 const browser = await chromium.launch({
-  executablePath: process.env.CHROME_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+  ...(fs.existsSync(CHROME) ? { executablePath: CHROME } : {}),
   args: [
     '--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
     '--js-flags=--expose-gc', '--enable-precise-memory-info',
@@ -608,6 +612,10 @@ if (fs.existsSync(baselinePath) && path.resolve(OUT) !== path.resolve(baselinePa
   ];
   log('\nGOALS');
   for (const [name, before, after, ok, want] of rows) {
+    if (after === undefined || after === null) {
+      log(`  SKIP  ${name.padEnd(15)} ${'-'.padStart(9)}     not measured in this run`);
+      continue;
+    }
     const pass = ok(after, before);
     const delta = typeof before === 'number' && before !== 0
       ? ` (${(((after - before) / before) * 100).toFixed(1)}%)` : '';
@@ -617,11 +625,18 @@ if (fs.existsSync(baselinePath) && path.resolve(OUT) !== path.resolve(baselinePa
     ['ESCAPED', results.ESCAPED, (v) => v === 0, '== 0'],
     ['ENERGY_DRIFT_PCT', results.ENERGY_DRIFT_PCT, (v) => v < 0.01, '< 0.01'],
     ['LOBE_CHANGES', results.LOBE_CHANGES, (v) => v >= 120, '>= 120'],
-    ['SSIM_MIN', results.SSIM_MIN, (v) => v !== null && v >= 0.98, '>= 0.98'],
+    ['SSIM_MIN', results.SSIM_MIN, (v) => v >= 0.98, '>= 0.98'],
   ];
   log('NON-REGRESSION GATES');
   let allGates = true;
   for (const [name, val, ok, want] of gates) {
+    // A partial run (--phases) does not produce every metric. Skipping is
+    // reported rather than silently counted as a pass, so a CI job that only
+    // runs the physics phase cannot look greener than it is.
+    if (val === undefined || val === null) {
+      log(`  SKIP  ${name.padEnd(18)} ${'-'.padStart(9)}  not measured in this run`);
+      continue;
+    }
     const pass = ok(val);
     if (!pass) allGates = false;
     log(`  ${pass ? 'PASS' : 'FAIL'}  ${name.padEnd(18)} ${String(val).padStart(9)}  want ${want}`);

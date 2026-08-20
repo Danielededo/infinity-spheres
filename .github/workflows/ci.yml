@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      - run: npm run check
+
+  gates:
+    name: Physics gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+      - run: npx playwright install --with-deps chromium
+
+      # Only the physics phase runs here. Those gates are exact and hardware
+      # independent: no marble may ever end a step outside the glass, kinetic
+      # energy must not drift with restitution at 1, and marbles must still
+      # cross between lobes. The render metrics are deliberately not gated in
+      # CI: frame time carries 27% run-to-run variance on a CPU rasteriser
+      # (see bench/README.md), and the SSIM references were rendered on a
+      # different machine, so both would be flaky rather than informative.
+      - name: Physics non-regression gates
+        run: npm run bench:gates

@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # The workflows pin major tags, which quietly go stale — the deploy run
+  # already warns that its actions target a deprecated Node. Let dependabot
+  # propose the bumps with a version that exists, rather than guessing one.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci"
+
+  # three.js is pinned twice, in index.html's importmap and in the harness's
+  # devDependency. Dependabot can only see package.json, so a three update
+  # needs index.html changed in the same PR; `npm run check` fails the CI if
+  # they drift, which is the reminder.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "deps"
