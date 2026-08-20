@@ -24,7 +24,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # No `enablement: true` here on purpose: creating the Pages site needs
       # repo-admin rights, which the workflow's GITHUB_TOKEN does not have even
