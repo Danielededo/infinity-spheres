@@ -19,3 +19,5 @@ Thumbs.db
 # bench: per-run artifacts (bench/ref/*.png are the tracked references)
 bench/last-*.png
 bench/metrics.json
+# agent worktrees: scratch checkouts created by tooling, never part of the repo
+.claude/worktrees/
