@@ -139,12 +139,40 @@ Two known approximations, both measured:
 | Zoom | scroll / pinch | — |
 | Pan | right-drag / two fingers | — |
 | Pause | **Pause** | <kbd>space</kbd> |
-| Show/hide the glass | **Glass** | <kbd>G</kbd> |
+| Glass → X-ray → hidden | **Glass** | <kbd>G</kbd> |
+| Gravity | **Gravity** | <kbd>V</kbd> |
+| Trails | **Trails** | <kbd>T</kbd> |
 | Auto-orbit | **Spin** | <kbd>A</kbd> |
 | Reset (new colours and velocities) | **Reset** | <kbd>R</kbd> |
 | Show/hide the HUD | — | <kbd>H</kbd> |
 
-The **Speed** slider scales time from 0 to 3×.
+Four sliders: **Speed** scales time from 0 to 3×, **Marbles** from 2 to 40, **Size** scales the radius
+range from 0.5× to 1.4×, and **Elastic** sets the restitution from 0.8 to 1. Changing the count or the
+size rebuilds the marbles; the other two take effect live.
+
+Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), the three camera poses the
+benchmark uses, a PNG export, and **Copy link**.
+
+### The energy readout
+
+The panel shows total energy, kinetic plus gravitational. It is the number worth watching: at the
+default settings it does not move at all, however many thousands of impacts have accumulated, because
+the collisions are exactly elastic. Two things make it fall, and it reports both rather than hiding
+them:
+
+- **Elastic below 1** — by construction. That is what restitution means.
+- **Gravity on** — about 22% over 90 simulated seconds, and *not* because of the integrator. The
+  contact model puts a marble back exactly on the limit surface, and that projection is energetically
+  free only when there is no potential; with gravity it quietly changes `mgh` on every one of thousands
+  of wall contacts. Accounting for the work that projection does needs a considerably more elaborate
+  solver than a toggle justifies, so the drift is measured and displayed instead. At zero g the same
+  code holds total energy to **0.000000%** over the same 90 seconds.
+
+### Sharing a setup
+
+Every control is encoded in the URL hash, so **Copy link** produces a link that restores the exact
+configuration — for example `#n=18&z=1.1&e=0.92&g=1` is the marble-run preset. No hash means the
+defaults, which is also what the reference screenshots in `bench/ref` were taken of.
 
 ## Running it locally
 

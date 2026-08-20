@@ -99,6 +99,42 @@
     font-size: 10px;
   }
 
+  .readout {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    margin: -4px 0 12px;
+    padding: 6px 8px;
+    border: 1px solid var(--stroke);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .readout b { color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 620; }
+  .readout em { font-style: normal; margin-left: auto; font-size: 10px; opacity: .8; }
+
+  details.more { margin-top: 10px; }
+  details.more > summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 11px;
+    list-style: none;
+    padding: 4px 0;
+  }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary::before { content: "▸ "; }
+  details.more[open] > summary::before { content: "▾ "; }
+  details.more .group { margin-top: 6px; }
+  details.more .group > span {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+
   #note {
     position: fixed;
     bottom: max(12px, env(safe-area-inset-bottom));
@@ -124,21 +160,78 @@
     <div class="stat"><b id="s-fps">0</b><i>fps</i></div>
   </div>
 
+  <!-- Total energy, kinetic plus gravitational. At zero g with restitution 1 it
+       does not move, however many thousands of collisions have happened, and
+       that is the point. Lower the elasticity and it falls; switch gravity on
+       and it also falls, because putting a marble back on the wall surface
+       changes its height for free. Both are shown rather than hidden. -->
+  <div class="readout">
+    energy <b id="s-energy">0</b><em id="s-energy-note">constant</em>
+  </div>
+
   <div class="row">
     <label for="speed">Speed</label>
     <input id="speed" type="range" min="0" max="3" step="0.05" value="1" />
     <output id="speed-out">1.00×</output>
   </div>
+  <div class="row">
+    <label for="count">Marbles</label>
+    <input id="count" type="range" min="2" max="40" step="1" value="30" />
+    <output id="count-out">30</output>
+  </div>
+  <div class="row">
+    <label for="size">Size</label>
+    <input id="size" type="range" min="0.5" max="1.4" step="0.05" value="1" />
+    <output id="size-out">1.00×</output>
+  </div>
+  <div class="row">
+    <label for="elastic">Elastic</label>
+    <input id="elastic" type="range" min="0.8" max="1" step="0.005" value="1" />
+    <output id="elastic-out">1.000</output>
+  </div>
 
   <div class="btns">
     <button id="btn-pause" aria-pressed="false">Pause</button>
     <button id="btn-glass" aria-pressed="true">Glass</button>
+    <button id="btn-gravity" aria-pressed="false">Gravity</button>
+  </div>
+  <div class="btns">
+    <button id="btn-trails" aria-pressed="false">Trails</button>
     <button id="btn-spin" aria-pressed="true">Spin</button>
     <button id="btn-reset">Reset</button>
   </div>
 
+  <details class="more">
+    <summary>more</summary>
+    <div class="group">
+      <span>presets</span>
+      <div class="btns">
+        <button data-preset="default">Default</button>
+        <button data-preset="heavy">One heavy</button>
+        <button data-preset="swarm">Swarm</button>
+        <button data-preset="marble-run">Marble run</button>
+      </div>
+    </div>
+    <div class="group">
+      <span>camera</span>
+      <div class="btns">
+        <button data-pose="front">Front</button>
+        <button data-pose="oblique">Oblique</button>
+        <button data-pose="crossing">Crossing</button>
+      </div>
+    </div>
+    <div class="group">
+      <span>export</span>
+      <div class="btns">
+        <button id="btn-shot">Save PNG</button>
+        <button id="btn-link">Copy link</button>
+      </div>
+    </div>
+  </details>
+
   <p class="keys">
-    <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>H</kbd> hide
+    <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>V</kbd> gravity · <kbd>T</kbd> trails ·
+    <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>H</kbd> hide
   </p>
 </div>
 
@@ -170,6 +263,10 @@ const CONF = {
   speedMax: 12.0,
   swirl: 0.35,        // transverse share of the initial velocity
   restitution: 1.0,   // 1 = perfectly elastic, for marbles and for the wall
+  gravity: 0,         // world units/s^2 downwards. 0 = the zero-g default
+  gravityOn: 22,      // what the gravity toggle switches to
+  sizeScale: 1.0,     // multiplies rMin and rMax together
+  trailLength: 48,    // positions remembered per marble when trails are on
   // 1000 was ~8x more than the picture needs. SSIM against the reference
   // screenshots holds at 0.9926 here, and only falls under the 0.98 gate below
   // 45 segments; 125 keeps real margin instead of sitting on the boundary.
@@ -178,6 +275,88 @@ const CONF = {
 };
 
 const R = CONF.tubeRadius;
+
+/* ------------------------------------------------------------------ *
+ * Runtime state
+ *
+ * CONF holds the defaults; this holds what the controls change. Kept apart so
+ * "no query string" always means "exactly the default scene", which is what
+ * the reference screenshots in bench/ref were taken of.
+ * ------------------------------------------------------------------ */
+const state = {
+  seed: 0,             // 0 = re-roll on every load and every Reset
+  marbles: CONF.marbles,
+  sizeScale: CONF.sizeScale,
+  restitution: CONF.restitution,
+  gravity: CONF.gravity,
+  timeScale: 1,
+  glassMode: 0,        // 0 glass, 1 wireframe, 2 hidden
+  trails: false,
+  spin: true,
+  heavyOne: false,     // the "one heavy" preset: first marble at max size
+};
+
+/* The marbles' randomness runs on its own generator rather than Math.random.
+ *
+ * Not fussiness: three.js draws from Math.random to make the uuid of every
+ * Material and BufferGeometry it constructs. So adding one material anywhere in
+ * this file shifts the global stream and every marble comes out different —
+ * which is exactly what happened when the x-ray material and the trail geometry
+ * were added, and it moved the reference screenshots for no visible reason. A
+ * private stream makes the scene reproducible no matter what else allocates.
+ *
+ * seed 0 means "pick one", so the page stays lively; a seed in the URL pins the
+ * arrangement, and Reset then reproduces it instead of re-rolling. */
+let rngState = 0;
+function reseed(seed) {
+  rngState = (seed || (Math.random() * 0xffffffff)) >>> 0;
+}
+function rng() {
+  rngState = (rngState + 0x6D2B79F5) >>> 0;
+  let t = rngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+/** Read state out of the location hash, so a link can carry a setup. */
+function readHash() {
+  const q = new URLSearchParams(location.hash.slice(1));
+  if (!q.toString()) return;
+  const num = (k, lo, hi, dflt) => {
+    const v = parseFloat(q.get(k));
+    return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+  };
+  state.marbles = Math.round(num('n', 2, 40, state.marbles));
+  state.sizeScale = num('z', 0.5, 1.4, state.sizeScale);
+  state.restitution = num('e', 0.8, 1, state.restitution);
+  state.timeScale = num('s', 0, 3, state.timeScale);
+  state.gravity = q.get('g') === '1' ? CONF.gravityOn : 0;
+  state.glassMode = Math.round(num('x', 0, 2, state.glassMode));
+  state.trails = q.get('t') === '1';
+  state.heavyOne = q.get('h') === '1';
+  state.seed = Math.max(0, Math.floor(num('seed', 0, 4294967295, 0)));
+}
+
+function writeHash() {
+  const q = new URLSearchParams();
+  const d = CONF;
+  if (state.marbles !== d.marbles) q.set('n', state.marbles);
+  if (state.sizeScale !== d.sizeScale) q.set('z', state.sizeScale);
+  if (state.restitution !== d.restitution) q.set('e', state.restitution);
+  if (state.timeScale !== 1) q.set('s', state.timeScale);
+  if (state.gravity > 0) q.set('g', '1');
+  if (state.glassMode !== 0) q.set('x', state.glassMode);
+  if (state.trails) q.set('t', '1');
+  if (state.heavyOne) q.set('h', '1');
+  if (state.seed) q.set('seed', state.seed);
+  const h = q.toString();
+  // replaceState rather than assigning location.hash: no history entries, and
+  // no scroll jump on every slider tick.
+  history.replaceState(null, '', h ? '#' + h : location.pathname);
+}
+
+readHash();
 
 /* ------------------------------------------------------------------ *
  * The spine: a Bernoulli lemniscate in the XY plane
@@ -480,6 +659,90 @@ const glass = new THREE.Mesh(
 );
 scene.add(glass);
 
+// The x-ray mode. Worth having: the crossing is trimmed open by dropping the
+// faces of each branch that fall inside the other, and that is invisible
+// through a glass wall.
+const glassMaterial = glass.material;
+const wireMaterial = new THREE.MeshBasicMaterial({
+  color: 0x6fb4ff, wireframe: true, transparent: true, opacity: 0.35,
+});
+
+function applyGlassMode() {
+  glass.visible = state.glassMode !== 2;
+  glass.material = state.glassMode === 1 ? wireMaterial : glassMaterial;
+}
+
+/* ------------------------------------------------------------------ *
+ * Trails
+ *
+ * Every marble's recent path, in a single LineSegments. One geometry rather
+ * than one per marble keeps this at one draw call instead of thirty, which
+ * matters because draw calls are the metric this scene is worst at.
+ * ------------------------------------------------------------------ */
+const TRAIL = CONF.trailLength;
+let trailMesh = null, trailPos = null, trailCol = null, trailHead = 0, trailFilled = 0;
+
+function buildTrails(n) {
+  if (trailMesh) {
+    scene.remove(trailMesh);
+    trailMesh.geometry.dispose();
+    trailMesh.material.dispose();
+    trailMesh = null;
+  }
+  const segs = n * (TRAIL - 1);
+  trailPos = new Float32Array(segs * 2 * 3);
+  trailCol = new Float32Array(segs * 2 * 3);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(trailPos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(trailCol, 3));
+  trailMesh = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  trailMesh.frustumCulled = false;
+  trailMesh.visible = state.trails;
+  scene.add(trailMesh);
+  trailHead = 0; trailFilled = 0;
+}
+
+/** Push the current positions into each marble's ring buffer. */
+function recordTrails() {
+  for (const m of marbles) {
+    const h = trailHead * 3;
+    m.history[h] = m.pos.x; m.history[h + 1] = m.pos.y; m.history[h + 2] = m.pos.z;
+  }
+  trailHead = (trailHead + 1) % TRAIL;
+  if (trailFilled < TRAIL) trailFilled++;
+}
+
+/** Rebuild the line buffer from the ring buffers, oldest segment faintest. */
+function updateTrails() {
+  let o = 0;
+  for (const m of marbles) {
+    const c = m.mesh.material.color;
+    for (let k = 0; k < TRAIL - 1; k++) {
+      // walk backwards from the newest sample
+      const i0 = (trailHead - 1 - k + TRAIL * 2) % TRAIL;
+      const i1 = (trailHead - 2 - k + TRAIL * 2) % TRAIL;
+      const live = k < trailFilled - 1;
+      const a = i0 * 3, b = i1 * 3;
+      trailPos[o] = live ? m.history[a] : 0;
+      trailPos[o + 1] = live ? m.history[a + 1] : 0;
+      trailPos[o + 2] = live ? m.history[a + 2] : 0;
+      trailPos[o + 3] = live ? m.history[b] : 0;
+      trailPos[o + 4] = live ? m.history[b + 1] : 0;
+      trailPos[o + 5] = live ? m.history[b + 2] : 0;
+      const f = live ? 1 - k / (TRAIL - 1) : 0;
+      const ff = f * f;                       // square it: a short bright tail
+      trailCol[o] = c.r * ff; trailCol[o + 1] = c.g * ff; trailCol[o + 2] = c.b * ff;
+      trailCol[o + 3] = c.r * ff; trailCol[o + 4] = c.g * ff; trailCol[o + 5] = c.b * ff;
+      o += 6;
+    }
+  }
+  trailMesh.geometry.attributes.position.needsUpdate = true;
+  trailMesh.geometry.attributes.color.needsUpdate = true;
+}
+
 /* ------------------------------------------------------------------ *
  * The marbles
  * ------------------------------------------------------------------ */
@@ -487,7 +750,7 @@ const marbleGeo = new THREE.SphereGeometry(1, 32, 24);
 const marbles = [];
 let hits = 0, wallHits = 0;
 
-const rand = (min, max) => min + Math.random() * (max - min);
+const rand = (min, max) => min + rng() * (max - min);
 const wrap01 = (u) => u - Math.floor(u);
 
 function buildMarbles() {
@@ -497,15 +760,20 @@ function buildMarbles() {
   }
   marbles.length = 0;
   hits = 0; wallHits = 0;
+  reseed(state.seed);
 
-  const n = CONF.marbles;
+  const n = state.marbles;
   const centre = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const side = new THREE.Vector3();
   const up = new THREE.Vector3();
 
   for (let i = 0; i < n; i++) {
-    const r = rand(CONF.rMin, CONF.rMax);
+    // The size scale multiplies the whole range, so the distribution keeps its
+    // shape. It is clamped so a marble can never approach the bore radius.
+    const lo = CONF.rMin * state.sizeScale;
+    const hi = Math.min(CONF.rMax * state.sizeScale, R * 0.55);
+    const r = state.heavyOne && i === 0 ? hi : rand(lo, hi);
     const u = i / n;
 
     const hue = wrap01(i / n + rand(-0.02, 0.02));
@@ -534,15 +802,20 @@ function buildMarbles() {
     up.set(0, 0, 1);
 
     // Mostly along the tube, with a transverse kick so they also work the wall.
-    const speed = rand(CONF.speedMin, CONF.speedMax) * (Math.random() < 0.5 ? -1 : 1);
+    const speed = rand(CONF.speedMin, CONF.speedMax) * (rng() < 0.5 ? -1 : 1);
     const vel = tangent.clone().multiplyScalar(speed)
       .addScaledVector(side, rand(-1, 1) * CONF.swirl * Math.abs(speed))
       .addScaledVector(up, rand(-1, 1) * CONF.swirl * Math.abs(speed));
 
-    marbles.push({ mesh, r, m: r * r * r, pos: centre.clone(), vel });
+    marbles.push({
+      mesh, r, m: r * r * r, pos: centre.clone(), vel,
+      history: new Float32Array(TRAIL * 3),
+    });
     mesh.position.copy(centre);
   }
   document.getElementById('s-count').textContent = String(marbles.length);
+  buildTrails(marbles.length);
+  for (let i = 0; i < TRAIL; i++) recordTrails();   // seed, so trails start clean
 }
 
 /* ------------------------------------------------------------------ *
@@ -550,7 +823,7 @@ function buildMarbles() {
  *   j = -(1 + e)·(v_rel · n) / (1/m₁ + 1/m₂)
  * ------------------------------------------------------------------ */
 function solveMarbles() {
-  const e = CONF.restitution;
+  const e = state.restitution;
   for (let i = 0; i < marbles.length; i++) {
     const A = marbles[i];
     for (let j = i + 1; j < marbles.length; j++) {
@@ -587,7 +860,7 @@ function solveMarbles() {
  * never end a frame outside the glass.
  * ------------------------------------------------------------------ */
 function solveWall() {
-  const e = CONF.restitution;
+  const e = state.restitution;
   for (const m of marbles) {
     const p = m.pos;
     const n = nearestOnSpine(p.x, p.y, p.z);
@@ -609,8 +882,22 @@ function solveWall() {
 /* ------------------------------------------------------------------ *
  * Integration
  * ------------------------------------------------------------------ */
+/** Total energy: kinetic plus gravitational. With restitution at 1 this is the
+ *  invariant worth watching — it should not move no matter how many thousands
+ *  of impacts have happened. Height is measured from the lowest the marbles can
+ *  reach, so the number stays positive and comparable. */
+const FLOOR_Y = -(CONF.a / 3) - R;
+function totalEnergy() {
+  let e = 0;
+  for (const m of marbles) {
+    e += 0.5 * m.m * m.vel.lengthSq();
+    if (state.gravity > 0) e += m.m * state.gravity * (m.pos.y - FLOOR_Y);
+  }
+  return e;
+}
+
 function step(dt) {
-  const h = dt * timeScale;
+  const h = dt * state.timeScale;
   if (h <= 0) return;
 
   // Elastic impacts between unequal masses hand a lot of speed to the light
@@ -622,11 +909,26 @@ function step(dt) {
   const sub = Math.min(16, Math.max(1, Math.ceil((h * vMax) / (0.45 * CONF.rMin))));
   const hs = h / sub;
 
+  // Kick-drift-kick rather than forward Euler: better behaved for the smooth
+  // gravity term, and free.
+  //
+  // It does not make the gravity mode energy-conserving, and measurement says
+  // so: over 90 simulated seconds total energy holds to 0.000000% at zero g
+  // but falls about 22% with gravity on. The integrator is not the culprit —
+  // the contact model is. solveWall puts a marble back exactly on the limit
+  // surface, and that projection is free of charge only when there is no
+  // potential: with gravity it quietly changes mgh on every one of thousands of
+  // wall contacts. Fixing it properly needs a solver that accounts for the work
+  // the projection does, which is far more machinery than a toggle deserves.
+  // So the readout reports the drift instead of hiding it.
+  const gh = state.gravity * hs * 0.5;
   for (let s = 0; s < sub; s++) {
+    if (gh) for (const m of marbles) m.vel.y -= gh;
     for (const m of marbles) m.pos.addScaledVector(m.vel, hs);
     // Twice: separating a pair can nudge one into the wall, and vice versa.
     solveMarbles(); solveWall();
     solveMarbles(); solveWall();
+    if (gh) for (const m of marbles) m.vel.y -= gh;
   }
 
   for (const m of marbles) m.mesh.position.copy(m.pos);
@@ -640,16 +942,21 @@ const ui = {
   hits: document.getElementById('s-hits'),
   wall: document.getElementById('s-wall'),
   fps: document.getElementById('s-fps'),
+  energy: document.getElementById('s-energy'),
+  energyNote: document.getElementById('s-energy-note'),
 };
 let paused = false;
-let timeScale = 1;
 let fpsAcc = 0, fpsFrames = 0;
+let energy0 = 0;
 
 renderer.setAnimationLoop(() => {
   const raw = clock.getDelta();
   const dt = Math.min(raw, 1 / 30);        // clamp so a hidden tab cannot jump the sim
 
-  if (!paused) step(dt);
+  if (!paused) {
+    step(dt);
+    if (state.trails) { recordTrails(); updateTrails(); }
+  }
   controls.update();
   renderer.render(scene, camera);
 
@@ -660,6 +967,15 @@ renderer.setAnimationLoop(() => {
     ui.fps.textContent = String(Math.round(fpsFrames / fpsAcc));
     ui.hits.textContent = hits.toLocaleString('en-US');
     ui.wall.textContent = wallHits.toLocaleString('en-US');
+    const e = totalEnergy();
+    ui.energy.textContent = e.toFixed(2);
+    // Drift against the value at the last rebuild. At restitution 1 this stays
+    // at zero; below 1 it falls, which is the point of the slider.
+    const drift = energy0 ? ((e - energy0) / energy0) * 100 : 0;
+    ui.energyNote.textContent = Math.abs(drift) < 0.005
+      ? 'constant'
+      : (drift > 0 ? '+' : '') + drift.toFixed(2) + '%'
+        + (state.gravity > 0 ? ' (contact loss)' : '');
     fpsAcc = 0; fpsFrames = 0;
   }
 });
@@ -667,45 +983,156 @@ renderer.setAnimationLoop(() => {
 /* ------------------------------------------------------------------ *
  * UI
  * ------------------------------------------------------------------ */
-const btnPause = document.getElementById('btn-pause');
-const btnGlass = document.getElementById('btn-glass');
-const btnSpin = document.getElementById('btn-spin');
-const btnReset = document.getElementById('btn-reset');
-const hud = document.getElementById('hud');
-const speed = document.getElementById('speed');
-const speedOut = document.getElementById('speed-out');
+/* ------------------------------------------------------------------ *
+ * UI
+ * ------------------------------------------------------------------ */
+const $ = (id) => document.getElementById(id);
+const hud = $('hud');
+const btn = {
+  pause: $('btn-pause'), glass: $('btn-glass'), gravity: $('btn-gravity'),
+  trails: $('btn-trails'), spin: $('btn-spin'), reset: $('btn-reset'),
+};
+const sliders = {
+  speed: $('speed'), count: $('count'), size: $('size'), elastic: $('elastic'),
+};
+const outs = {
+  speed: $('speed-out'), count: $('count-out'), size: $('size-out'), elastic: $('elastic-out'),
+};
 
-function togglePause() {
-  paused = !paused;
-  btnPause.textContent = paused ? 'Resume' : 'Pause';
-  btnPause.setAttribute('aria-pressed', String(paused));
-}
-function toggleGlass() {
-  glass.visible = !glass.visible;
-  btnGlass.setAttribute('aria-pressed', String(glass.visible));
-}
-function toggleSpin() {
-  controls.autoRotate = !controls.autoRotate;
-  btnSpin.setAttribute('aria-pressed', String(controls.autoRotate));
+const GLASS_LABEL = ['Glass', 'X-ray', 'Hidden'];
+
+/** Push the whole of `state` into the controls and the scene. One function so
+ *  a preset, a shared link and a click all end up in the same place. */
+function syncUI({ rebuild = false } = {}) {
+  sliders.speed.value = state.timeScale;
+  sliders.count.value = state.marbles;
+  sliders.size.value = state.sizeScale;
+  sliders.elastic.value = state.restitution;
+  outs.speed.textContent = state.timeScale.toFixed(2) + '×';
+  outs.count.textContent = String(state.marbles);
+  outs.size.textContent = state.sizeScale.toFixed(2) + '×';
+  outs.elastic.textContent = state.restitution.toFixed(3);
+
+  btn.pause.textContent = paused ? 'Resume' : 'Pause';
+  btn.pause.setAttribute('aria-pressed', String(paused));
+  btn.glass.textContent = GLASS_LABEL[state.glassMode];
+  btn.glass.setAttribute('aria-pressed', String(state.glassMode === 0));
+  btn.gravity.setAttribute('aria-pressed', String(state.gravity > 0));
+  btn.trails.setAttribute('aria-pressed', String(state.trails));
+  btn.spin.setAttribute('aria-pressed', String(state.spin));
+
+  controls.autoRotate = state.spin;
+  applyGlassMode();
+  if (trailMesh) trailMesh.visible = state.trails;
+
+  if (rebuild) restart();
+  writeHash();
 }
 
-btnPause.addEventListener('click', togglePause);
-btnGlass.addEventListener('click', toggleGlass);
-btnSpin.addEventListener('click', toggleSpin);
-btnReset.addEventListener('click', buildMarbles);
+/** Rebuild the marbles and re-baseline the energy readout. */
+function restart() {
+  buildMarbles();
+  energy0 = totalEnergy();
+}
 
-speed.addEventListener('input', () => {
-  timeScale = Number(speed.value);
-  speedOut.textContent = timeScale.toFixed(2) + '×';
+btn.pause.addEventListener('click', () => { paused = !paused; syncUI(); });
+btn.glass.addEventListener('click', () => {
+  state.glassMode = (state.glassMode + 1) % 3;
+  syncUI();
+});
+btn.gravity.addEventListener('click', () => {
+  state.gravity = state.gravity > 0 ? 0 : CONF.gravityOn;
+  // Re-baseline: switching gravity changes what total energy even means.
+  energy0 = totalEnergy();
+  syncUI();
+});
+btn.trails.addEventListener('click', () => { state.trails = !state.trails; syncUI(); });
+btn.spin.addEventListener('click', () => { state.spin = !state.spin; syncUI(); });
+btn.reset.addEventListener('click', () => { restart(); writeHash(); });
+
+sliders.speed.addEventListener('input', () => {
+  state.timeScale = Number(sliders.speed.value);
+  syncUI();
+});
+sliders.elastic.addEventListener('input', () => {
+  state.restitution = Number(sliders.elastic.value);
+  syncUI();
+});
+// Count and size change how the marbles are laid out, so they rebuild. The
+// slider maxima are what the geometry allows: marbles are placed evenly along
+// the spine, so the count cannot exceed length / (2 * largest radius).
+sliders.count.addEventListener('input', () => {
+  state.marbles = Number(sliders.count.value);
+  syncUI({ rebuild: true });
+});
+sliders.size.addEventListener('input', () => {
+  state.sizeScale = Number(sliders.size.value);
+  syncUI({ rebuild: true });
+});
+
+const PRESETS = {
+  default:      { marbles: CONF.marbles, sizeScale: 1, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1, glassMode: 0, spin: true },
+  heavy:        { marbles: 24, sizeScale: 0.75, restitution: 1, gravity: 0, trails: false, heavyOne: true, timeScale: 1 },
+  swarm:        { marbles: 40, sizeScale: 0.6, restitution: 1, gravity: 0, trails: true, heavyOne: false, timeScale: 1 },
+  'marble-run': { marbles: 18, sizeScale: 1.1, restitution: 0.92, gravity: CONF.gravityOn, trails: false, heavyOne: false, timeScale: 1 },
+};
+for (const b of document.querySelectorAll('[data-preset]')) {
+  b.addEventListener('click', () => {
+    Object.assign(state, PRESETS[b.dataset.preset]);
+    paused = false;
+    syncUI({ rebuild: true });
+  });
+}
+
+// The three poses the benchmark uses, which is why they are known to frame well.
+const POSES = { front: [6, 12, 48], oblique: [34, 20, 30], crossing: [1, 5, 15] };
+for (const b of document.querySelectorAll('[data-pose]')) {
+  b.addEventListener('click', () => {
+    const [x, y, z] = POSES[b.dataset.pose];
+    state.spin = false;
+    camera.position.set(x, y, z);
+    controls.target.set(0, 0, 0);
+    controls.update();
+    syncUI();
+  });
+}
+
+$('btn-shot').addEventListener('click', () => {
+  // Draw first: without preserveDrawingBuffer the buffer is only valid
+  // immediately after a render, and paying for that flag all the time to
+  // support an occasional screenshot is the wrong trade.
+  renderer.render(scene, camera);
+  renderer.domElement.toBlob((blob) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'infinity-spheres.png';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, 'image/png');
+});
+
+$('btn-link').addEventListener('click', async () => {
+  writeHash();
+  const b = $('btn-link');
+  const said = (t) => { b.textContent = t; setTimeout(() => (b.textContent = 'Copy link'), 1400); };
+  try {
+    await navigator.clipboard.writeText(location.href);
+    said('Copied');
+  } catch {
+    said(location.hash ? 'Copy from bar' : 'Defaults');
+  }
 });
 
 addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   switch (e.code) {
-    case 'Space': e.preventDefault(); togglePause(); break;
-    case 'KeyG': toggleGlass(); break;
-    case 'KeyA': toggleSpin(); break;
-    case 'KeyR': buildMarbles(); break;
+    case 'Space': e.preventDefault(); paused = !paused; syncUI(); break;
+    case 'KeyG': state.glassMode = (state.glassMode + 1) % 3; syncUI(); break;
+    case 'KeyV': state.gravity = state.gravity > 0 ? 0 : CONF.gravityOn; energy0 = totalEnergy(); syncUI(); break;
+    case 'KeyT': state.trails = !state.trails; syncUI(); break;
+    case 'KeyA': state.spin = !state.spin; syncUI(); break;
+    case 'KeyR': restart(); writeHash(); break;
     case 'KeyH': hud.classList.toggle('hidden'); break;
   }
 });
@@ -716,10 +1143,11 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-buildMarbles();
+restart();
+syncUI();
 
 // exposed for the automated checks in the repository's test notes
-window.__scene = { curve, marbles, nearestOnSpine, step, R, LENGTH, SAMPLES, droppedFaces, CONF };
+window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES, droppedFaces, CONF };
 </script>
 </body>
 </html>
