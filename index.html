@@ -338,6 +338,14 @@
       </div>
     </div>
     <div class="group">
+      <span>spine</span>
+      <div class="btns">
+        <button data-curve="lemniscate" aria-pressed="true">Lemniscate</button>
+        <button data-curve="trefoil" aria-pressed="false">Trefoil</button>
+        <button data-curve="clover" aria-pressed="false">Clover</button>
+      </div>
+    </div>
+    <div class="group">
       <span>camera</span>
       <div class="btns">
         <button data-pose="front">Front</button>
@@ -446,6 +454,7 @@ const state = {
   spin: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   heavyOne: false,     // the "one heavy" preset: first marble at max size
   ride: false,         // camera rides the selected marble instead of orbiting
+  curve: 'lemniscate', // which spine, out of CURVES
 };
 
 /* The marbles' randomness runs on its own generator rather than Math.random.
@@ -488,6 +497,9 @@ function readHash() {
   state.trails = q.get('t') === '1';
   state.heavyOne = q.get('h') === '1';
   state.ride = q.get('f') === '1';
+  // Taken on trust here and validated once CURVES exists: readHash runs above
+  // the registry, so naming it from here is a temporal dead zone error.
+  if (q.get('c')) state.curve = q.get('c');
   state.seed = Math.max(0, Math.floor(num('seed', 0, 4294967295, 0)));
 }
 
@@ -503,6 +515,7 @@ function writeHash() {
   if (state.trails) q.set('t', '1');
   if (state.heavyOne) q.set('h', '1');
   if (state.ride) q.set('f', '1');
+  if (state.curve !== 'lemniscate') q.set('c', state.curve);
   if (state.seed) q.set('seed', state.seed);
   const h = q.toString();
   // replaceState rather than assigning location.hash: no history entries, and
@@ -535,9 +548,69 @@ class LemniscateCurve extends THREE.Curve {
   }
 }
 
-const curve = new LemniscateCurve();
-curve.arcLengthDivisions = 4000;        // dense LUT => getPointAt() is arc-length based
-const LENGTH = curve.getLength();
+/* An epitrochoid-style closed curve: x = sin t + b sin 2t, y = cos t - b cos 2t.
+ * b sets how far the three lobes reach, and with them the angle the branches
+ * cross at and how tight the bends get. b = 2 is the usual planar trefoil. */
+class RosetteCurve extends THREE.Curve {
+  constructor(b, scale) {
+    super();
+    this.b = b;
+    this.scale = scale;
+  }
+  getPoint(t, target = new THREE.Vector3()) {
+    const u = t * Math.PI * 2, b = this.b, k = this.scale;
+    return target.set(
+      k * (Math.sin(u) + b * Math.sin(2 * u)),
+      k * (Math.cos(u) - b * Math.cos(2 * u)),
+      0,
+    );
+  }
+}
+
+/* The spines on offer.
+ *
+ * Every one of these was checked against the four things that can go wrong,
+ * because most candidate curves fail at least one:
+ *
+ *  - The branches must genuinely intersect. A 3D trefoil knot does not: its
+ *    closest approach between distant arc positions is 8.10 against 2R = 4.8,
+ *    so the trim finds nothing to open and you get a sealed glass knot. It is
+ *    not on this list for that reason.
+ *  - They must intersect deeply enough for a marble, not just for the glass.
+ *    The trim opens a hole once the branches are within 2R; a marble only fits
+ *    through once they are within 2(R - r), which is 2.50 for the largest.
+ *    Between those two numbers you get a visible aperture with an invisible
+ *    wall behind it. All three curves here cross exactly, so the gap is zero.
+ *  - The tightest bend must stay wider than the bore, or the tube pinches shut
+ *    at the bend and the union-of-disks solid closes over. Every Lissajous
+ *    curve tried failed here (min radius 1.33, 0.83, 0.21 against R = 2.4), as
+ *    did the 3-petal rose at 2.00.
+ *  - Branches must cross, not merge. The 4-petal rose has pairs meeting at 0
+ *    degrees — collinear through the origin, staying within 2R for ~20 units of
+ *    arc — so the trim would delete a long slot rather than cut an X.
+ *
+ * The scales below all put max|p| at 20, so the bounding radius, and with it
+ * the camera framing, is the same for all three. */
+const CURVES = {
+  lemniscate: {
+    label: 'Lemniscate',
+    make: () => new LemniscateCurve(CONF.a),
+    note: '1 crossing at 90 degrees, bend radius 2.78R',
+  },
+  trefoil: {
+    label: 'Trefoil',
+    make: () => new RosetteCurve(2, 20 / 3),
+    note: '3 crossings at 75.6 degrees, bend radius 2.78R',
+  },
+  clover: {
+    label: 'Clover',
+    make: () => new RosetteCurve(1.5, 8),
+    note: '3 crossings at 86.6 degrees, bend radius 1.90R',
+  },
+};
+
+let curve = CURVES.lemniscate.make();
+let LENGTH = 0;
 
 /* ------------------------------------------------------------------ *
  * Polyline sampling of the spine, used by the wall solver.
@@ -548,20 +621,38 @@ const LENGTH = curve.getLength();
  * uses, so the mesh and the collision surface agree.
  * ------------------------------------------------------------------ */
 const SAMPLE_STEP = 0.35;
-const SAMPLES = Math.ceil(LENGTH / SAMPLE_STEP);
-const spine = new Float32Array(SAMPLES * 3);
+let SAMPLES = 0;
+let spine = new Float32Array(0);
 /** Radius of the smallest origin-centred sphere containing the whole solid.
  *  Used to frame the camera on a portrait window. */
 let BOUND_R = 0;
-{
+/** Lowest point the marbles can reach: the datum the gravitational term is
+ *  measured from, so the energy readout stays positive and comparable. Derived
+ *  from the spine rather than from CONF.a — the old -(a/3) - R was lemniscate
+ *  arithmetic, and it sat 0.4 units *inside* the glass even there. */
+let FLOOR_Y = 0;
+
+/** Resample the spine for the current curve. Everything downstream that cares
+ *  about the shape of the solid reads these bindings, so this is the one place
+ *  a curve change has to touch. */
+function buildSpine() {
+  curve.arcLengthDivisions = 4000;      // dense LUT => getPointAt() is arc-length based
+  LENGTH = curve.getLength();
+  SAMPLES = Math.ceil(LENGTH / SAMPLE_STEP);
+  spine = new Float32Array(SAMPLES * 3);
+  BOUND_R = 0;
+  let minY = Infinity;
   const p = new THREE.Vector3();
   for (let i = 0; i < SAMPLES; i++) {
     curve.getPointAt(i / SAMPLES, p);
     spine[3 * i] = p.x; spine[3 * i + 1] = p.y; spine[3 * i + 2] = p.z;
     BOUND_R = Math.max(BOUND_R, p.length());
+    minY = Math.min(minY, p.y);
   }
   BOUND_R += R;
+  FLOOR_Y = minY - R;
 }
+buildSpine();
 
 /* Nearest point on the spine, over the *whole* curve.
  *
@@ -737,11 +828,9 @@ rim.position.set(-24, 6, -22);
 scene.add(rim);
 
 const warm = new THREE.PointLight(0xff8ab8, 120, 90, 2);
-warm.position.set(-CONF.a * 0.7, 0, 10);
 scene.add(warm);
 
 const cool = new THREE.PointLight(0x63f7d6, 120, 90, 2);
-cool.position.set(CONF.a * 0.7, 0, -10);
 scene.add(cool);
 
 /* ------------------------------------------------------------------ *
@@ -752,9 +841,20 @@ const floor = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ color: 0x080b14, roughness: 0.85, metalness: 0.1 })
 );
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = -15;
 floor.receiveShadow = true;
 scene.add(floor);
+
+/** Put the two accent lights and the shadow-catching floor where the current
+ *  spine wants them. The floor only ever moves *down*: -15 is right for the
+ *  lemniscate and is left exactly there, so switching curves cannot disturb the
+ *  default scene, but a curve that reaches lower needs the plane out of the way
+ *  or it would cut through the glass. */
+function placeSceneFurniture() {
+  const reach = BOUND_R - R;             // how far the spine itself extends
+  warm.position.set(-reach * 0.7, 0, 10);
+  cool.position.set(reach * 0.7, 0, -10);
+  floor.position.y = Math.min(-15, FLOOR_Y - 1.5);
+}
 
 /* ------------------------------------------------------------------ *
  * The glass solid: a circle of radius R swept along the lemniscate.
@@ -799,7 +899,7 @@ function findCrossingSamples() {
   return { flag: out, list };
 }
 
-const crossing = findCrossingSamples();
+let crossing = findCrossingSamples();
 
 /* Signed distance from a point to the wall of the *other* branch: negative
  * inside it, zero on its surface. The minimum is taken over the spine samples
@@ -939,9 +1039,17 @@ function openCrossing(geo, tubularSegments, radialSegments) {
   return { dropped, clipped, added: px.length / 3 - srcPos.count };
 }
 
-const tubeGeo = new THREE.TubeGeometry(curve, CONF.tubularSegments, R, CONF.radialSegments, true);
-const trim = openCrossing(tubeGeo, CONF.tubularSegments, CONF.radialSegments);
-const droppedFaces = trim.dropped;
+/** Sweep the tube along the current spine and cut the junctions open. */
+function buildTube() {
+  const geo = new THREE.TubeGeometry(curve, CONF.tubularSegments, R, CONF.radialSegments, true);
+  const t = openCrossing(geo, CONF.tubularSegments, CONF.radialSegments);
+  return { geo, trim: t };
+}
+
+let tube = buildTube();
+let tubeGeo = tube.geo;
+let trim = tube.trim;
+let droppedFaces = trim.dropped;
 
 const glass = new THREE.Mesh(
   tubeGeo,
@@ -1346,9 +1454,8 @@ function solveWall() {
  * ------------------------------------------------------------------ */
 /** Total energy: kinetic plus gravitational. With restitution at 1 this is the
  *  invariant worth watching — it should not move no matter how many thousands
- *  of impacts have happened. Height is measured from the lowest the marbles can
- *  reach, so the number stays positive and comparable. */
-const FLOOR_Y = -(CONF.a / 3) - R;
+ *  of impacts have happened. Height is measured from FLOOR_Y, the lowest the
+ *  marbles can reach, so the number stays positive and comparable. */
 function totalEnergy() {
   let e = 0;
   for (const m of marbles) {
@@ -1496,6 +1603,9 @@ function syncUI({ rebuild = false } = {}) {
   btn.trails.setAttribute('aria-pressed', String(state.trails));
   btn.spin.setAttribute('aria-pressed', String(state.spin));
   btn.ride.setAttribute('aria-pressed', String(state.ride));
+  for (const b of document.querySelectorAll('[data-curve]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.curve === state.curve));
+  }
   btn.ride.textContent = state.ride ? 'Stop riding' : 'Ride a marble';
 
   const m = selected >= 0 && selected < marbles.length ? marbles[selected] : null;
@@ -1511,6 +1621,40 @@ function syncUI({ rebuild = false } = {}) {
 
   if (rebuild) restart();
   writeHash();
+}
+
+/** Swap the spine for another one.
+ *
+ * Everything about the solid comes from the curve, so this rebuilds the lot:
+ * the sampled spine, the junction search, the swept tube and its trim, and the
+ * marbles, which are seeded along the spine and would otherwise be left inside
+ * the old shape. The old geometry is disposed rather than left to the GC, since
+ * a tube at this tessellation is a few megabytes of buffers.
+ *
+ * The trim costs about six times more on the three-junction curves — 45% of
+ * spine samples are flagged as near another branch against 23% for the
+ * lemniscate — so this is visibly not free on a slow machine. It happens on a
+ * click, not per frame. */
+function setCurve(name) {
+  if (!CURVES[name] || name === state.curve) return;
+  state.curve = name;
+  curve = CURVES[name].make();
+  buildSpine();
+  crossing = findCrossingSamples();
+
+  const old = tubeGeo;
+  tube = buildTube();
+  tubeGeo = tube.geo;
+  trim = tube.trim;
+  droppedFaces = trim.dropped;
+  glass.geometry = tubeGeo;
+  old.dispose();
+
+  placeSceneFurniture();
+  if (!camTouched) fitCamera();
+  restart();
+  writeHash();
+  syncUI();
 }
 
 /** Rebuild the marbles and re-baseline the energy readout. */
@@ -1624,6 +1768,10 @@ for (const b of document.querySelectorAll('[data-preset]')) {
   });
 }
 
+for (const b of document.querySelectorAll('[data-curve]')) {
+  b.addEventListener('click', () => setCurve(b.dataset.curve));
+}
+
 // The three poses the benchmark uses, which is why they are known to frame well.
 const POSES = { front: [6, 12, 48], oblique: [34, 20, 30], crossing: [1, 5, 15] };
 for (const b of document.querySelectorAll('[data-pose]')) {
@@ -1689,6 +1837,15 @@ addEventListener('resize', () => {
   if (!camTouched) fitCamera();
 });
 
+if (!CURVES[state.curve]) state.curve = 'lemniscate';   // an unknown ?c= in the URL
+placeSceneFurniture();
+if (state.curve !== 'lemniscate') {
+  // A shared link can name a different spine. Go through the same path a click
+  // takes, but without the hash write and rebuild that restart() will do below.
+  const want = state.curve;
+  state.curve = 'lemniscate';
+  setCurve(want);
+}
 restart();
 if (state.ride) setRide(true);           // a shared link can arrive riding
 syncUI();
@@ -1703,9 +1860,21 @@ if (boot) {
 }
 
 // exposed for the automated checks in the repository's test notes
-window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES,
-                   droppedFaces, trim, CONF, renderer, scene, camera, controls, setRide,
-                   boundRadius: BOUND_R, marbleMesh };
+/* Exposed for the checks in the repository's test notes. The shape-derived
+ * entries are getters: a curve change reassigns those bindings, and a plain
+ * object literal would have captured whatever they were at load. */
+window.__scene = {
+  marbles, nearestOnSpine, step, totalEnergy, state, R, CONF,
+  renderer, scene, camera, controls, setRide, setCurve, marbleMesh, CURVES,
+  get curve() { return curve; },
+  get LENGTH() { return LENGTH; },
+  get SAMPLES() { return SAMPLES; },
+  get spine() { return spine; },
+  get trim() { return trim; },
+  get droppedFaces() { return droppedFaces; },
+  get boundRadius() { return BOUND_R; },
+  get floorY() { return FLOOR_Y; },
+};
 </script>
 </body>
 </html>

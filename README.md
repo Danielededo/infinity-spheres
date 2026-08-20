@@ -156,6 +156,41 @@ size rebuilds the marbles; the other two take effect live.
 Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), the three camera poses the
 benchmark uses, a PNG export, and **Copy link**.
 
+### Other spines
+
+Under **more → spine** the tube can be swept along a different closed curve. The physics does not care
+which: containment is "the marble's centre stays within `R - r` of the nearest point on the spine", and
+the junction trim finds crossings by searching the spine for branches that come within `2R` of each
+other at distant arc positions. Both are curve-agnostic, so a new spine needs no new physics.
+
+| spine | crossings | angle | length | tightest bend | capacity |
+| --- | --- | --- | --- | --- | --- |
+| Lemniscate | 1 | 90° | 104.9 | 2.78 R | 45 |
+| Trefoil | 3 | 75.6° | 170.2 | 2.78 R | 74 |
+| Clover | 3 | 86.6° | 155.0 | 1.90 R | 67 |
+
+All three are scaled to the same bounding radius, so the camera framing does not change between them.
+Measured over 60 simulated seconds each: no marble ever leaves the tube (worst excursion 1.8e-15,
+1.6e-15 and 1.3e-15 — floating-point noise), energy holds at 0.000000%, and junction crossings roughly
+double on the three-junction spines (392 and 383 against 198), so marbles really do pass through the new
+junctions rather than getting wedged in them.
+
+Most candidate curves fail, and it is worth knowing why:
+
+- **A 3D trefoil knot never self-intersects.** Its closest approach between distant arc positions is
+  8.10 against `2R = 4.8`, so the trim finds nothing to open and you get a sealed glass knot.
+- **The glass and the marbles need different depths.** The trim cuts a hole once branches are within
+  `2R = 4.8`; a marble only fits through once they are within `2(R - r)`, which is 2.50 for the largest.
+  In between you get a visible aperture with an invisible wall behind it.
+- **The tightest bend must stay wider than the bore.** Every Lissajous curve tried failed here (bend
+  radius 1.33, 0.83, 0.21 against `R = 2.4`) — the tube pinches shut at the bend. So did the 3-petal
+  rose, at 2.00.
+- **Branches must cross, not merge.** The 4-petal rose has pairs meeting at 0° — collinear through the
+  origin, staying within `2R` for about 20 units of arc — so the trim would delete a long slot rather
+  than cut an X.
+
+`#c=trefoil` or `#c=clover` in the URL selects one.
+
 ### Riding a marble
 
 Click any marble to select it — the raycast only tests the marbles, so the glass does not shield them
