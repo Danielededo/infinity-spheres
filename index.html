@@ -687,6 +687,24 @@ scene.backgroundIntensity = 0.38;
 scene.backgroundBlurriness = 0.5;
 pmrem.dispose();
 
+/* How strongly that environment lights everything, and the only place it can be
+ * set from.
+ *
+ * A material's own envMapIntensity is ignored unless the material also carries
+ * its own envMap: three copies it into the uniform only inside
+ * `if ( material.envMap )`, and for a material relying on scene.environment it
+ * then overwrites the uniform with scene.environmentIntensity. Nothing here
+ * sets material.envMap, so the glass and the marbles used to ask for 1.6 and
+ * 1.4 and both silently got 1. Measured before this change: raising the
+ * marbles' value from 1.4 to 12 altered not one pixel, while removing
+ * scene.environment altered the image substantially.
+ *
+ * 1 is what the scene has always actually rendered with, so it stays 1 and the
+ * picture does not move. Per-material intensities would need an explicit
+ * material.envMap on each material, which is a change to the look rather than
+ * a correction. */
+scene.environmentIntensity = 1;
+
 /* ------------------------------------------------------------------ *
  * Lights
  * ------------------------------------------------------------------ */
@@ -826,7 +844,8 @@ const glass = new THREE.Mesh(
     side: THREE.DoubleSide,
     transparent: true,
     depthWrite: false,
-    envMapIntensity: 1.6,
+    // No envMapIntensity: see scene.environmentIntensity above. This asked for
+    // 1.6 and got 1.
   })
 );
 scene.add(glass);
@@ -944,7 +963,8 @@ const marbleMaterial = new THREE.MeshPhysicalMaterial({
   roughness: 0.2,         // need to be present, and clearcoat needs to be > 0,
   clearcoat: 1,           // so that the shader compiles the chunks that read
   clearcoatRoughness: 0.1,//   them in at all (USE_CLEARCOAT is conditional)
-  envMapIntensity: 1.4,
+  // No envMapIntensity: see scene.environmentIntensity above. This asked for
+  // 1.4 and got 1.
 });
 
 /* Feed the per-instance finish into the physical shader.
