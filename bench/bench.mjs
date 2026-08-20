@@ -67,11 +67,19 @@ const CFG = {
   browser: 'chromium/swiftshader',
 };
 
-// Three fixed camera poses. Pose 0 is also the pose used for FRAME_P95.
+// Four fixed camera poses. Pose 0 is also the pose used for FRAME_P95.
+//
+// 'junction' exists because the other three could not see the crossing. The
+// trim that opens it used to leave a sawtooth a full triangle deep, plainly
+// visible to anyone looking at the middle of the figure, and every pose here
+// reported 0.99 or better throughout: at 320x200 the junction is a handful of
+// pixels in all of them. A pose that fills the frame with it gives the gate
+// something to fail on.
 const POSES = [
   { name: 'front', pos: [6, 12, 48] },
   { name: 'oblique', pos: [34, 20, 30] },
   { name: 'close', pos: [1, 5, 15] },
+  { name: 'junction', pos: [0, 2.7, 5.6] },
 ];
 
 const OUT = arg('out', path.join(HERE, 'metrics.json'));
