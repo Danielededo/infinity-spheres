@@ -891,7 +891,7 @@ function recordTrails() {
 function updateTrails() {
   let o = 0;
   for (const m of marbles) {
-    const c = m.mesh.material.color;
+    const c = m.color;
     for (let k = 0; k < TRAIL - 1; k++) {
       // walk backwards from the newest sample
       const i0 = (trailHead - 1 - k + TRAIL * 2) % TRAIL;
@@ -918,7 +918,67 @@ function updateTrails() {
 /* ------------------------------------------------------------------ *
  * The marbles
  * ------------------------------------------------------------------ */
+/* One InstancedMesh, not one Mesh per marble.
+ *
+ * Thirty separate meshes cost thirty draw calls in the colour pass, thirty more
+ * filling the shadow map, and thirty more again in the extra pass the glass's
+ * transmission forces — which is where nearly all of the frame's draw calls
+ * were going.
+ *
+ * The catch is that an InstancedMesh carries exactly one material, and these
+ * marbles differ in metalness, roughness and clearcoat as well as in colour.
+ * Colour is per-instance for free (instanceColor); the other three are fed in
+ * as an instanced vec4 and patched into the standard physical shader below, so
+ * the result is the picture that was already there rather than forty
+ * identically polished balls. The SSIM gate is what keeps that claim honest. */
+const MAX_MARBLES = 40;              // must be >= the count slider's maximum
 const marbleGeo = new THREE.SphereGeometry(1, 32, 24);
+
+// metalness, roughness, clearcoat, clearcoatRoughness — one vec4 per instance.
+const finish = new THREE.InstancedBufferAttribute(new Float32Array(MAX_MARBLES * 4), 4);
+marbleGeo.setAttribute('aFinish', finish);
+
+const marbleMaterial = new THREE.MeshPhysicalMaterial({
+  color: 0xffffff,        // white, because the per-instance colour multiplies it
+  metalness: 0.3,         // these four are overwritten per instance. They only
+  roughness: 0.2,         // need to be present, and clearcoat needs to be > 0,
+  clearcoat: 1,           // so that the shader compiles the chunks that read
+  clearcoatRoughness: 0.1,//   them in at all (USE_CLEARCOAT is conditional)
+  envMapIntensity: 1.4,
+});
+
+/* Feed the per-instance finish into the physical shader.
+ *
+ * onBeforeCompile runs before the #include directives are resolved, so these
+ * replacements target the directives and append the override immediately after
+ * each one. The clearcoat lines repeat the clamping the chunk itself does,
+ * geometryRoughness and all, so this path is not subtly glossier than the
+ * uniform one it replaces. */
+marbleMaterial.onBeforeCompile = (shader) => {
+  shader.vertexShader = 'attribute vec4 aFinish;\nvarying vec4 vFinish;\n'
+    + shader.vertexShader.replace('void main() {', 'void main() {\n\tvFinish = aFinish;');
+  shader.fragmentShader = 'varying vec4 vFinish;\n' + shader.fragmentShader
+    .replace('#include <metalnessmap_fragment>',
+             '#include <metalnessmap_fragment>\n\tmetalnessFactor = vFinish.x;')
+    .replace('#include <roughnessmap_fragment>',
+             '#include <roughnessmap_fragment>\n\troughnessFactor = vFinish.y;')
+    .replace('#include <lights_physical_fragment>',
+             '#include <lights_physical_fragment>\n'
+             + '\tmaterial.clearcoat = saturate( vFinish.z );\n'
+             + '\tmaterial.clearcoatRoughness = min( max( vFinish.w, 0.0525 ) + geometryRoughness, 1.0 );');
+};
+
+const marbleMesh = new THREE.InstancedMesh(marbleGeo, marbleMaterial, MAX_MARBLES);
+marbleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+marbleMesh.castShadow = true;
+marbleMesh.receiveShadow = true;
+// A single object spanning the whole tube: it is never the right thing to cull,
+// and recomputing an instance bounding sphere every frame to learn that would
+// cost more than the test saves.
+marbleMesh.frustumCulled = false;
+marbleMesh.count = 0;
+scene.add(marbleMesh);
+
 const marbles = [];
 let hits = 0, wallHits = 0;
 
@@ -926,10 +986,6 @@ const rand = (min, max) => min + rng() * (max - min);
 const wrap01 = (u) => u - Math.floor(u);
 
 function buildMarbles() {
-  for (const m of marbles) {
-    scene.remove(m.mesh);
-    m.mesh.material.dispose();
-  }
   marbles.length = 0;
   hits = 0; wallHits = 0;
   reseed(state.seed);
@@ -951,20 +1007,19 @@ function buildMarbles() {
     const hue = wrap01(i / n + rand(-0.02, 0.02));
     const color = new THREE.Color().setHSL(hue, rand(0.6, 1.0), rand(0.44, 0.64));
 
-    const material = new THREE.MeshPhysicalMaterial({
-      color,
-      metalness: rand(0.05, 0.55),
-      roughness: rand(0.05, 0.35),
-      clearcoat: rand(0.4, 1.0),
-      clearcoatRoughness: rand(0.02, 0.2),
-      envMapIntensity: 1.4,
-    });
+    // Drawn in exactly the order the per-marble materials used to draw them:
+    // the seeded stream has to produce the same scene it did before.
+    const metalness = rand(0.05, 0.55);
+    const roughness = rand(0.05, 0.35);
+    const clearcoat = rand(0.4, 1.0);
+    const clearcoatRoughness = rand(0.02, 0.2);
 
-    const mesh = new THREE.Mesh(marbleGeo, material);
-    mesh.scale.setScalar(r);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
+    marbleMesh.setColorAt(i, color);
+    const f = i * 4;
+    finish.array[f] = metalness;
+    finish.array[f + 1] = roughness;
+    finish.array[f + 2] = clearcoat;
+    finish.array[f + 3] = clearcoatRoughness;
 
     // Start on the spine, evenly spaced: the arc gap (L/n ≈ 3.5) is wider than
     // the largest pair of radii, so nothing starts overlapping.
@@ -980,11 +1035,25 @@ function buildMarbles() {
       .addScaledVector(up, rand(-1, 1) * CONF.swirl * Math.abs(speed));
 
     marbles.push({
-      mesh, r, m: r * r * r, pos: centre.clone(), vel,
+      r, m: r * r * r, pos: centre.clone(), vel, color,
       history: new Float32Array(TRAIL * 3),
     });
-    mesh.position.copy(centre);
+
+    // Uniform scale plus translation, written straight into the instance
+    // buffer. The off-diagonal entries are zero from allocation and stay zero,
+    // so there is nothing to build a Matrix4 for.
+    const o = i * 16;
+    const mat = marbleMesh.instanceMatrix.array;
+    mat[o] = r; mat[o + 1] = 0; mat[o + 2] = 0; mat[o + 3] = 0;
+    mat[o + 4] = 0; mat[o + 5] = r; mat[o + 6] = 0; mat[o + 7] = 0;
+    mat[o + 8] = 0; mat[o + 9] = 0; mat[o + 10] = r; mat[o + 11] = 0;
+    mat[o + 12] = centre.x; mat[o + 13] = centre.y; mat[o + 14] = centre.z; mat[o + 15] = 1;
   }
+
+  marbleMesh.count = n;
+  marbleMesh.instanceMatrix.needsUpdate = true;
+  marbleMesh.instanceColor.needsUpdate = true;
+  finish.needsUpdate = true;
   document.getElementById('s-count').textContent = String(marbles.length);
   buildTrails(marbles.length);
   for (let i = 0; i < TRAIL; i++) recordTrails();   // seed, so trails start clean
@@ -1103,7 +1172,15 @@ function step(dt) {
     if (gh) for (const m of marbles) m.vel.y -= gh;
   }
 
-  for (const m of marbles) m.mesh.position.copy(m.pos);
+  // Push the new centres into the instance buffer. Three numbers per marble
+  // into a Float32Array that is already there: no allocation per frame, which
+  // the ALLOC_FRAME gate checks.
+  const mat = marbleMesh.instanceMatrix.array;
+  for (let i = 0; i < marbles.length; i++) {
+    const o = i * 16, p = marbles[i].pos;
+    mat[o + 12] = p.x; mat[o + 13] = p.y; mat[o + 14] = p.z;
+  }
+  marbleMesh.instanceMatrix.needsUpdate = true;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1350,7 +1427,8 @@ if (boot) {
 
 // exposed for the automated checks in the repository's test notes
 window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES,
-                   droppedFaces, CONF, camera, controls, boundRadius: BOUND_R };
+                   droppedFaces, CONF, renderer, scene, camera, controls,
+                   boundRadius: BOUND_R, marbleMesh };
 </script>
 </body>
 </html>
