@@ -1,22 +1,17 @@
 version: 2
 updates:
-  # The workflows pin major tags, which quietly go stale — the deploy run
-  # already warns that its actions target a deprecated Node. Let dependabot
-  # propose the bumps with a version that exists, rather than guessing one.
+  # Actions only. This is what caught the deprecated-Node warning in the
+  # deploy workflow, and it is worth keeping.
+  #
+  # npm is deliberately not watched. three.js is pinned twice — in
+  # index.html's importmap and in package.json's devDependency — and
+  # dependabot can only see the second, so every three PR it opens is red by
+  # construction. One such PR (0.185.1) was merged while red and broke main.
+  # A three upgrade has to be done by hand, with `npm run bench` to check the
+  # render did not change; see bench/three-0.185.1-rejected.json.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
     commit-message:
       prefix: "ci"
-
-  # three.js is pinned twice, in index.html's importmap and in the harness's
-  # devDependency. Dependabot can only see package.json, so a three update
-  # needs index.html changed in the same PR; `npm run check` fails the CI if
-  # they drift, which is the reminder.
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: monthly
-    commit-message:
-      prefix: "deps"
