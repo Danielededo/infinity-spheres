@@ -1,6 +1,6 @@
 name: Deploy to GitHub Pages
 
-# The site is static, so the repository is published as-is.
+# The site is static: one HTML file plus the social-preview image it links to.
 on:
   push:
     branches: [main]
@@ -34,10 +34,22 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v6
 
+      # Only the files the site actually serves. Publishing the repository
+      # root also shipped the benchmark harness, its reference PNGs and the
+      # lockfile — around 200 KB of images nobody visiting the page asks for,
+      # and a needlessly wide public surface.
+      - name: Stage the site
+        run: |
+          mkdir -p _site/docs
+          cp index.html _site/
+          cp docs/preview.png _site/docs/
+          echo "--- staged ---"
+          find _site -type f | sort
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: .
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
