@@ -42,6 +42,13 @@
     top: max(16px, env(safe-area-inset-top));
     left: max(16px, env(safe-area-inset-left));
     width: min(300px, calc(100vw - 32px));
+    /* A short window gets the same internal scroll the phone layout does,
+       rather than a panel running off the bottom of the screen. dvh so a
+       mobile browser's collapsing toolbar does not cut it off. */
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 14px 16px 12px;
     border: 1px solid var(--stroke);
     border-radius: 14px;
@@ -52,6 +59,24 @@
     transition: opacity .25s ease, transform .25s ease;
   }
   #hud.hidden { opacity: 0; transform: translateY(-8px); pointer-events: none; }
+
+  /* Header row: the title, and the button that folds the panel away. Collapsing
+     matters most on a phone, where the expanded panel is most of the screen,
+     but it is useful on a desktop too, so the button is always there. */
+  .head { display: flex; align-items: flex-start; gap: 10px; }
+  .head > div { min-width: 0; }
+  #btn-menu {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font-size: 11px;
+    line-height: 1;
+  }
+  #hud.collapsed #hud-body { display: none; }
+  #hud.collapsed { max-height: none; overflow: visible; }
 
   #hud h1 { margin: 0 0 2px; font-size: 14px; font-weight: 650; letter-spacing: .01em; }
   #hud h1 span { color: var(--accent); }
@@ -145,14 +170,104 @@
     pointer-events: none;
   }
   @media (max-width: 640px) { #note { display: none; } }
+
+  /* ---------------------------------------------------------------- *
+   * Phones
+   *
+   * The panel moves to the bottom, within thumb reach, and spans the width. It
+   * starts collapsed — see the matching JS — so the scene is what you get on
+   * opening the page, and it scrolls internally rather than running off the
+   * screen when there is not enough height for every control.
+   * ---------------------------------------------------------------- */
+  @media (max-width: 640px) {
+    #hud {
+      top: auto;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      left: max(12px, env(safe-area-inset-left));
+      right: max(12px, env(safe-area-inset-right));
+      width: auto;
+      max-height: min(72dvh, 560px);
+      -webkit-overflow-scrolling: touch;
+      padding: 12px 13px 11px;
+      border-radius: 16px;
+    }
+    #hud.hidden { transform: translateY(8px); }
+    /* Collapsed it is a compact bar, so it stops being a panel at all. */
+    #hud.collapsed { padding-bottom: 12px; }
+    #hud.collapsed .sub { display: none; }
+    #hud.collapsed h1 { font-size: 13px; }
+    #hud .keys { display: none; }
+  }
+
+  /* Touch targets. 40px is the smallest that is comfortable with a thumb, and
+     a range input needs the extra height for its own thumb to be grabbable. */
+  @media (pointer: coarse) {
+    button { min-height: 40px; padding: 9px 12px; font-size: 12.5px; }
+    #btn-menu { width: 38px; height: 38px; min-height: 0; }
+    input[type="range"] { height: 34px; }
+    details.more > summary { padding: 8px 0; font-size: 12px; }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Loading, and the CDN not answering
+   * ---------------------------------------------------------------- */
+  #boot {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--bg);
+    text-align: center;
+    transition: opacity .35s ease;
+  }
+  #boot.done { opacity: 0; pointer-events: none; }
+  #boot .ring {
+    width: 26px;
+    height: 26px;
+    margin: 0 auto 14px;
+    border: 2px solid var(--stroke);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 900ms linear infinite;
+  }
+  #boot.failed .ring { animation: none; border-top-color: #ff8a8a; }
+  #boot p { margin: 0; font-size: 13px; }
+  #boot .hint { margin-top: 7px; color: var(--muted); font-size: 11.5px; max-width: 34em; }
+  #boot code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* The camera's idle orbit is the one thing here that moves without being
+     asked to, so it is what a reduced-motion preference turns off (the JS
+     starts with Spin off to match). Panel transitions go too. */
+  @media (prefers-reduced-motion: reduce) {
+    #hud, button, #boot { transition: none; }
+    #boot .ring { animation: none; }
+  }
 </style>
 </head>
 <body>
 
-<div id="hud">
-  <h1>Bernoulli <span>Lemniscate</span> Tube ∞</h1>
-  <p class="sub">A glass tube swept along an ∞, with 30 marbles loose inside.</p>
+<div id="boot">
+  <div>
+    <div class="ring" aria-hidden="true"></div>
+    <p id="boot-msg">Loading three.js…</p>
+    <p class="hint" id="boot-hint">Fetching the module from the jsDelivr CDN.</p>
+  </div>
+</div>
 
+<div id="hud">
+  <div class="head">
+    <div>
+      <h1>Bernoulli <span>Lemniscate</span> Tube ∞</h1>
+      <p class="sub">A glass tube swept along an ∞, with 30 marbles loose inside.</p>
+    </div>
+    <button id="btn-menu" aria-expanded="true" aria-controls="hud-body"
+            aria-label="Collapse the controls" title="Collapse the controls (M)">▲</button>
+  </div>
+
+  <div id="hud-body">
   <div class="stats">
     <div class="stat"><b id="s-count">0</b><i>marbles</i></div>
     <div class="stat"><b id="s-hits">0</b><i>impacts</i></div>
@@ -231,11 +346,28 @@
 
   <p class="keys">
     <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>V</kbd> gravity · <kbd>T</kbd> trails ·
-    <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>H</kbd> hide
+    <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>M</kbd> menu · <kbd>H</kbd> hide
   </p>
+  </div>
 </div>
 
 <p id="note">Drag to orbit · scroll to zoom · right-drag to pan</p>
+
+<script>
+  /* This page is a single file that pulls three.js from a CDN at runtime, so a
+     blocked or unreachable CDN means a black screen with nothing to explain it.
+     The overlay above is up from the first paint; the module clears this timer
+     as soon as it starts running, and if it never does, the card says why. */
+  window.__bootTimer = setTimeout(function () {
+    var boot = document.getElementById('boot');
+    if (!boot) return;
+    boot.classList.add('failed');
+    document.getElementById('boot-msg').textContent = 'three.js could not be loaded';
+    document.getElementById('boot-hint').innerHTML =
+      'The scene needs <code>three@0.169.0</code> from cdn.jsdelivr.net. Check the '
+      + 'network or a content blocker, then reload.';
+  }, 12000);
+</script>
 
 <script type="importmap">
 {
@@ -249,6 +381,11 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// Reaching this line means the CDN answered and the module is running, so the
+// "could not load" timer set in the head must not fire. The overlay itself
+// stays up until the first frame is ready, at the bottom of this file.
+clearTimeout(window.__bootTimer);
 
 /* ------------------------------------------------------------------ *
  * Configuration
@@ -292,7 +429,11 @@ const state = {
   timeScale: 1,
   glassMode: 0,        // 0 glass, 1 wireframe, 2 hidden
   trails: false,
-  spin: true,
+  // The camera's idle orbit is the only thing here that moves without being
+  // asked, so a reduced-motion preference starts with it off. Deliberately not
+  // serialised into the hash: a shared link should not override the setting a
+  // visitor chose in their own operating system.
+  spin: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   heavyOne: false,     // the "one heavy" preset: first marble at max size
 };
 
@@ -396,12 +537,17 @@ const LENGTH = curve.getLength();
 const SAMPLE_STEP = 0.35;
 const SAMPLES = Math.ceil(LENGTH / SAMPLE_STEP);
 const spine = new Float32Array(SAMPLES * 3);
+/** Radius of the smallest origin-centred sphere containing the whole solid.
+ *  Used to frame the camera on a portrait window. */
+let BOUND_R = 0;
 {
   const p = new THREE.Vector3();
   for (let i = 0; i < SAMPLES; i++) {
     curve.getPointAt(i / SAMPLES, p);
     spine[3 * i] = p.x; spine[3 * i + 1] = p.y; spine[3 * i + 2] = p.z;
+    BOUND_R = Math.max(BOUND_R, p.length());
   }
+  BOUND_R += R;
 }
 
 /* Nearest point on the spine, over the *whole* curve.
@@ -467,6 +613,32 @@ controls.minDistance = 6;
 controls.maxDistance = 150;
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.4;
+
+/* Framing on a portrait window.
+ *
+ * The camera's home position frames the ∞ in a landscape window. Held upright,
+ * a phone's *horizontal* field of view is the tight one and the lobes fall
+ * outside it. Fitting them properly needs 111 units of distance, and FogExp2 at
+ * that depth has already taken 59% of the image — so the camera instead pulls
+ * back far enough to fit the figure vertically with margin, and the lobes are
+ * allowed to run past the sides. That is 66 units on a 390x844 phone against 50
+ * before, where the fog costs 27%.
+ *
+ * Landscape windows are left exactly alone, the benchmark's 320x200 among them.
+ */
+const CAM_HOME = camera.position.length();
+let camTouched = false;                  // the visitor has taken over the view
+controls.addEventListener('start', () => { camTouched = true; });
+
+function fitCamera() {
+  const aspect = innerWidth / innerHeight;
+  if (aspect >= 1) return;
+  const vFov = (camera.fov * Math.PI) / 180;
+  const portrait = (BOUND_R / Math.sin(vFov / 2)) * 1.2;
+  const t = Math.min(1, (1 - aspect) / 0.45);
+  camera.position.setLength(CAM_HOME + (portrait - CAM_HOME) * t);
+}
+fitCamera();
 
 /* ------------------------------------------------------------------ *
  * Environment: a procedural equirectangular map through PMREM.
@@ -983,14 +1155,12 @@ renderer.setAnimationLoop(() => {
 /* ------------------------------------------------------------------ *
  * UI
  * ------------------------------------------------------------------ */
-/* ------------------------------------------------------------------ *
- * UI
- * ------------------------------------------------------------------ */
 const $ = (id) => document.getElementById(id);
 const hud = $('hud');
 const btn = {
   pause: $('btn-pause'), glass: $('btn-glass'), gravity: $('btn-gravity'),
   trails: $('btn-trails'), spin: $('btn-spin'), reset: $('btn-reset'),
+  menu: $('btn-menu'),
 };
 const sliders = {
   speed: $('speed'), count: $('count'), size: $('size'), elastic: $('elastic'),
@@ -1034,6 +1204,24 @@ function restart() {
   buildMarbles();
   energy0 = totalEnergy();
 }
+
+/* Folding the panel away.
+ *
+ * On a narrow screen it starts folded: the expanded panel is most of a phone's
+ * display, and the scene is what someone opened the page for. The breakpoint
+ * matches the CSS one. There is no resize listener on purpose — re-folding the
+ * panel because a phone was rotated would undo a deliberate tap. */
+const NARROW = matchMedia('(max-width: 640px)');
+function setMenu(open) {
+  hud.classList.toggle('collapsed', !open);
+  btn.menu.textContent = open ? '▲' : '▼';
+  btn.menu.setAttribute('aria-expanded', String(open));
+  const label = (open ? 'Collapse' : 'Expand') + ' the controls';
+  btn.menu.setAttribute('aria-label', label);
+  btn.menu.title = label + ' (M)';
+}
+setMenu(!NARROW.matches);
+btn.menu.addEventListener('click', () => setMenu(hud.classList.contains('collapsed')));
 
 btn.pause.addEventListener('click', () => { paused = !paused; syncUI(); });
 btn.glass.addEventListener('click', () => {
@@ -1090,6 +1278,7 @@ for (const b of document.querySelectorAll('[data-pose]')) {
   b.addEventListener('click', () => {
     const [x, y, z] = POSES[b.dataset.pose];
     state.spin = false;
+    camTouched = true;                   // do not re-frame this on the next resize
     camera.position.set(x, y, z);
     controls.target.set(0, 0, 0);
     controls.update();
@@ -1133,6 +1322,7 @@ addEventListener('keydown', (e) => {
     case 'KeyT': state.trails = !state.trails; syncUI(); break;
     case 'KeyA': state.spin = !state.spin; syncUI(); break;
     case 'KeyR': restart(); writeHash(); break;
+    case 'KeyM': setMenu(hud.classList.contains('collapsed')); break;
     case 'KeyH': hud.classList.toggle('hidden'); break;
   }
 });
@@ -1141,13 +1331,26 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  // Re-frame when a phone is rotated, but only while the visitor has not moved
+  // the camera themselves: undoing a deliberate zoom would be rude.
+  if (!camTouched) fitCamera();
 });
 
 restart();
 syncUI();
 
+// The scene is built and the loop is running, so the loading overlay has done
+// its job. Faded rather than yanked, and then taken out of the tree entirely so
+// nothing is left compositing over the canvas.
+const boot = document.getElementById('boot');
+if (boot) {
+  boot.classList.add('done');
+  setTimeout(() => boot.remove(), 400);
+}
+
 // exposed for the automated checks in the repository's test notes
-window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES, droppedFaces, CONF };
+window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES,
+                   droppedFaces, CONF, camera, controls, boundRadius: BOUND_R };
 </script>
 </body>
 </html>
