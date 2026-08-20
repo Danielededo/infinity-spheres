@@ -665,11 +665,28 @@ buildSpine();
  * is no need for a spatial index here. */
 const near = { d: 0, qx: 0, qy: 0, qz: 0 };
 function nearestOnSpine(px, py, pz) {
-  // Hoisted into locals on purpose. These are module bindings that a curve
-  // change reassigns, so they are `let`, and this is the innermost loop in the
-  // simulation — 300 to 490 samples per marble per sub-step. Reading a mutable
-  // binding inside the loop leaves the engine unable to treat the count as
-  // fixed or the array as invariant.
+  // Hoisted into locals, and the loop below is the price of a switchable spine.
+  //
+  // This is the innermost loop in the simulation: 300 to 490 samples, three
+  // array reads each, per marble per sub-step. When SAMPLES was a const the
+  // engine knew the trip count at compile time and could unroll against it. As
+  // a binding a curve change reassigns, it cannot. Measured, same inputs, same
+  // 300 samples, 300k calls:
+  //
+  //   const SAMPLES (before switchable curves)   0.727 us/call, step 0.103 ms
+  //   let SAMPLES                                1.113 us/call, step 0.153 ms
+  //   let SAMPLES, trip count frozen back        0.811 us/call, step 0.111 ms
+  //
+  // So the variable trip count is most of it and hoisting these into locals is
+  // not what fixes it — that was tried, and measured no different. Nor was it
+  // the array being reassignable (preallocating one buffer for the largest
+  // curve: no change) or the wrap arithmetic (replacing % with a comparison:
+  // slightly worse). Getting the constant back would mean a specialised copy of
+  // this loop per curve, generated at run time, which is not a trade worth
+  // making for a single-file page.
+  //
+  // In proportion: step goes from 0.103 ms to 0.153 ms, which at 60fps is 0.6%
+  // of the frame budget against 0.9%. Worth knowing, not worth contorting for.
   const sp = spine, n = SAMPLES;
   let best = 0, bestD2 = Infinity;
   for (let i = 0; i < n; i++) {
