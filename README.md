@@ -144,6 +144,7 @@ Two known approximations, both measured:
 | Trails | **Trails** | <kbd>T</kbd> |
 | Auto-orbit | **Spin** | <kbd>A</kbd> |
 | Reset (new colours and velocities) | **Reset** | <kbd>R</kbd> |
+| Fold the panel away | **▲ / ▼** | <kbd>M</kbd> |
 | Show/hide the HUD | — | <kbd>H</kbd> |
 
 Four sliders: **Speed** scales time from 0 to 3×, **Marbles** from 2 to 40, **Size** scales the radius
@@ -152,6 +153,29 @@ size rebuilds the marbles; the other two take effect live.
 
 Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), the three camera poses the
 benchmark uses, a PNG export, and **Copy link**.
+
+### On a phone
+
+The panel is a bottom bar within thumb reach and it **starts folded**, so opening the page gives you
+the scene rather than a screen of controls. Tapping **▼** unfolds it; it scrolls internally when the
+window is too short for every control, and buttons and sliders get 40px touch targets. The same fold
+button appears on a desktop, where the panel starts open.
+
+The camera also re-frames itself on a portrait window. Held upright, a phone's *horizontal* field of
+view is the tight one and the lobes fall outside it — so the camera pulls back to fit the figure
+vertically with margin, 66 units on a 390×844 phone against 50 in landscape. It does not pull back far
+enough to fit the lobes horizontally: that needs 111 units, and `FogExp2` at that depth has taken 59%
+of the image. Rotating the device re-frames, unless you have moved the camera yourself.
+
+A reduced-motion preference (`prefers-reduced-motion`) starts with **Spin** off — the idle orbit is the
+only thing here that moves without being asked — and drops the panel transitions. It is deliberately
+not part of the URL hash, so a shared link cannot override the setting you chose in your own OS.
+
+### If the CDN is unreachable
+
+The page is one file that fetches `three@0.169.0` at runtime, so a blocked CDN used to mean a black
+screen with nothing to explain it. There is now a loading card from the first paint, and after 12
+seconds without the module it says what failed and what it was trying to fetch.
 
 ### The energy readout
 
