@@ -64,6 +64,17 @@ The default viewport is 320x200 for the same reason: at 480x300 this scene runs
 at 0.89 fps here and a full run would take over an hour. Every revision is
 measured at the same viewport.
 
+## Why three.js is pinned
+
+`three-0.185.1-rejected.json` records a measured upgrade attempt. With `index.html` bumped to 0.185.1
+as well, SSIM against the references falls to 0.887 / 0.892 / 0.635 and draw calls rise 67 → 97, both
+far outside the harness's noise. 0.180.0, by contrast, measured pixel-identical (0.99935 / 0.99856 /
+1.000), so the regression is somewhere between those two and a future upgrade should bisect that range.
+Physics is unaffected either way.
+
+A three upgrade therefore has to change `index.html`'s importmap and `package.json` together, and be
+checked with `npm run bench` before the references are touched.
+
 ## Reference images
 
 `bench/ref/*.png` are the baseline screenshots for the SSIM gate, at three fixed
