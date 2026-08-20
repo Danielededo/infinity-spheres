@@ -1,0 +1,41 @@
+{
+  "config": {
+    "width": 320,
+    "height": 200,
+    "dpr": 1,
+    "frames": 200,
+    "warmupFrames": 40,
+    "growthFrom": 60,
+    "growthTo": 460,
+    "physIters": 2000,
+    "shotFrame": 300,
+    "gateSeconds": 90,
+    "seed": 20260819,
+    "browser": "chromium/swiftshader",
+    "three": "0.185.1",
+    "poses": [
+      "front",
+      "oblique",
+      "close"
+    ]
+  },
+  "FRAME_P95": 902.3,
+  "FRAME_P50": 188.8,
+  "DRAWCALLS": 97,
+  "TRIS": 172194,
+  "PROGRAMS": 12,
+  "GEOMETRIES": 15,
+  "TEXTURES": 8,
+  "ALLOC_FRAME": 0,
+  "PHYS_MS": 0.1309,
+  "ESCAPED": 0,
+  "ENERGY_DRIFT_PCT": 0,
+  "LOBE_CHANGES": 190,
+  "SSIM": {
+    "front": 0.8873,
+    "oblique": 0.89158,
+    "close": 0.63509
+  },
+  "SSIM_MIN": 0.63509,
+  "_note": "Measured with index.html ALSO bumped to 0.185.1, i.e. a complete upgrade. Kept as the evidence for pinning three at 0.169.0."
+}
