@@ -788,44 +788,147 @@ function findCrossingSamples() {
 
 const crossing = findCrossingSamples();
 
+/* Signed distance from a point to the wall of the *other* branch: negative
+ * inside it, zero on its surface. The minimum is taken over the spine samples
+ * that are more than WINDOW of arc away, which is what makes "the other
+ * branch" well defined.
+ *
+ * Sampling the curve rather than solving for the true nearest point costs
+ * accuracy of order step^2 / R, which is 0.35^2 / 2.4 / 8 = 0.006 units here —
+ * 170 times finer than the 1.06-unit spacing of the tube's own rings, so the
+ * approximation is nowhere near being the limiting factor. */
+function otherBranchSDF(x, y, z, uOwn) {
+  let best = Infinity;
+  for (const i of crossing.list) {
+    let du = Math.abs(i / SAMPLES - uOwn);
+    if (du > 0.5) du = 1 - du;
+    if (du < WINDOW) continue;
+    const k = 3 * i;
+    const dx = x - spine[k], dy = y - spine[k + 1], dz = z - spine[k + 2];
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < best) best = d2;
+  }
+  return Math.sqrt(best) - R;
+}
+
+/* Open the crossing by *clipping* the triangles that straddle the other
+ * branch's wall, rather than dropping them whole.
+ *
+ * Dropping whole triangles was the first version and it showed: keep-or-drop
+ * can only cut along triangle edges, so the opening was quantised to one
+ * triangle, and because the test was on the centroid, neighbouring triangles
+ * flipped either side of the true curve and left a sawtooth. At 125 tubular
+ * segments the rings are 1.06 units apart and that sawtooth was plainly
+ * visible — the earlier tessellation cut from 1000 to 125 segments made it
+ * eight times coarser, and the SSIM gate did not object because at 320x200 the
+ * junction covers a handful of pixels.
+ *
+ * Clipping puts the cut on the surface itself at any tessellation. Each
+ * straddling triangle contributes one or two triangles and one or two new
+ * vertices, with position, normal and uv interpolated along the crossed edges,
+ * so the cost is a few dozen triangles rather than a finer tube. */
 function openCrossing(geo, tubularSegments, radialSegments) {
-  const pos = geo.attributes.position;
+  const srcPos = geo.attributes.position;
+  const srcNor = geo.attributes.normal;
+  const srcUv = geo.attributes.uv;
   const idx = geo.index.array;
   const stride = radialSegments + 1;
-  const kept = [];
-  let dropped = 0;
+
+  // Grown as clipping adds vertices; seeded with the tube's own.
+  const px = Array.from(srcPos.array);
+  const nx = Array.from(srcNor.array);
+  const tx = Array.from(srcUv.array);
+  const out = [];
+  let dropped = 0, clipped = 0;
+
+  // One new vertex per crossed edge, shared between the two triangles that use
+  // it, so the clipped boundary stays welded and its normals stay continuous.
+  const cut = new Map();
+  const cutVertex = (a, b, fa, fb, uOwn) => {
+    const key = a < b ? a * 1e7 + b : b * 1e7 + a;
+    const hit = cut.get(key);
+    if (hit !== undefined) return hit;
+    // Start from the linear guess, then bisect on the real field.
+    //
+    // Linear interpolation alone is only first-order in the edge length, and
+    // these edges are 1.06 units long. Measured against the aperture area this
+    // trim converges to at 2000 tubular segments (92.11, itself within 0.05% of
+    // the 16R^2 = 92.16 that two perpendicular cylinders would give): linear
+    // interpolation alone lands 3.1% short at 125 segments, bisection brings
+    // that to 0.6%, and what is left is the tube's own faceting rather than the
+    // cut. Eight steps cost a few hundred distance evaluations once, at load.
+    let t = fa / (fa - fb);                           // fa >= 0 > fb, so t in [0,1)
+    {
+      let lo = 0, hi = 1;
+      for (let it = 0; it < 8; it++) {
+        const x = px[a * 3] + (px[b * 3] - px[a * 3]) * t;
+        const y = px[a * 3 + 1] + (px[b * 3 + 1] - px[a * 3 + 1]) * t;
+        const z = px[a * 3 + 2] + (px[b * 3 + 2] - px[a * 3 + 2]) * t;
+        if (otherBranchSDF(x, y, z, uOwn) >= 0) lo = t; else hi = t;
+        t = (lo + hi) / 2;
+      }
+    }
+    const id = px.length / 3;
+    for (let k = 0; k < 3; k++) px.push(px[a * 3 + k] + (px[b * 3 + k] - px[a * 3 + k]) * t);
+    let l = 0;
+    const n = [];
+    for (let k = 0; k < 3; k++) {
+      const v = nx[a * 3 + k] + (nx[b * 3 + k] - nx[a * 3 + k]) * t;
+      n.push(v); l += v * v;
+    }
+    l = Math.sqrt(l) || 1;
+    for (let k = 0; k < 3; k++) nx.push(n[k] / l);
+    for (let k = 0; k < 2; k++) tx.push(tx[a * 2 + k] + (tx[b * 2 + k] - tx[a * 2 + k]) * t);
+    cut.set(key, id);
+    return id;
+  };
 
   for (let f = 0; f < idx.length; f += 3) {
-    const a = idx[f], b = idx[f + 1], c = idx[f + 2];
-    const uOwn = Math.floor(a / stride) / tubularSegments;
+    const v = [idx[f], idx[f + 1], idx[f + 2]];
+    const uOwn = Math.floor(v[0] / stride) / tubularSegments;
     const ownSample = Math.round(uOwn * SAMPLES) % SAMPLES;
 
-    if (crossing.flag[ownSample]) {
-      const cx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3;
-      const cy = (pos.getY(a) + pos.getY(b) + pos.getY(c)) / 3;
-      const cz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
+    if (!crossing.flag[ownSample]) { out.push(v[0], v[1], v[2]); continue; }
 
-      let insideOther = false;
-      for (const i of crossing.list) {
-        let du = Math.abs(i / SAMPLES - uOwn);
-        if (du > 0.5) du = 1 - du;
-        if (du < WINDOW) continue;
-        const k = 3 * i;
-        const dx = cx - spine[k], dy = cy - spine[k + 1], dz = cz - spine[k + 2];
-        if (dx * dx + dy * dy + dz * dz < R * R) { insideOther = true; break; }
-      }
-      if (insideOther) { dropped++; continue; }
+    const d = v.map((k) => otherBranchSDF(px[k * 3], px[k * 3 + 1], px[k * 3 + 2], uOwn));
+    const inside = (d[0] < 0) + (d[1] < 0) + (d[2] < 0);
+
+    if (inside === 0) { out.push(v[0], v[1], v[2]); continue; }
+    if (inside === 3) { dropped++; continue; }
+
+    clipped++;
+    // Rotate so the lone vertex — the one on its own side — comes first, which
+    // leaves the winding order intact.
+    let r = 0;
+    if (inside === 1) { while (d[r] >= 0) r++; }        // one in: lone vertex is the inside one
+    else { while (d[r] < 0) r++; }                      // two in: lone vertex is the outside one
+    const a = v[r], b = v[(r + 1) % 3], c = v[(r + 2) % 3];
+    const fa = d[r], fb = d[(r + 1) % 3], fc = d[(r + 2) % 3];
+
+    if (inside === 1) {
+      // a is inside: the kept region is the quad b, c and the two cut points.
+      const ab = cutVertex(b, a, fb, fa, uOwn);
+      const ac = cutVertex(c, a, fc, fa, uOwn);
+      out.push(ab, b, c, ab, c, ac);
+    } else {
+      // a is the only one outside: the kept region is the triangle at a.
+      const ab = cutVertex(a, b, fa, fb, uOwn);
+      const ac = cutVertex(a, c, fa, fc, uOwn);
+      out.push(a, ab, ac);
     }
-
-    kept.push(a, b, c);
   }
 
-  geo.setIndex(kept);
-  return dropped;
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(px, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(nx, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(tx, 2));
+  geo.setIndex(out);
+  geo.computeBoundingSphere();
+  return { dropped, clipped, added: px.length / 3 - srcPos.count };
 }
 
 const tubeGeo = new THREE.TubeGeometry(curve, CONF.tubularSegments, R, CONF.radialSegments, true);
-const droppedFaces = openCrossing(tubeGeo, CONF.tubularSegments, CONF.radialSegments);
+const trim = openCrossing(tubeGeo, CONF.tubularSegments, CONF.radialSegments);
+const droppedFaces = trim.dropped;
 
 const glass = new THREE.Mesh(
   tubeGeo,
@@ -1447,7 +1550,7 @@ if (boot) {
 
 // exposed for the automated checks in the repository's test notes
 window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES,
-                   droppedFaces, CONF, renderer, scene, camera, controls,
+                   droppedFaces, trim, CONF, renderer, scene, camera, controls,
                    boundRadius: BOUND_R, marbleMesh };
 </script>
 </body>
