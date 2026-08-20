@@ -1,0 +1,36 @@
+instrumented three 0.180.0: build/three.module.js, build/three.core.js
+
+[1/4] render metrics @ 320x200, 200 frames after 40 warmup
+      ... 80/279 frames, 0s elapsed, 26666.7 fps
+      ... 180/279 frames, 100s elapsed, 1.8 fps
+      FRAME_P95=1698.4ms p50=549.2ms cpu_p95=1695.1ms (0.93 fps)  DRAWCALLS=67  TRIS=404940
+      PROGRAMS=12 GEOMETRIES=15 TEXTURES=6  ALLOC_FRAME=0 (max 0)
+[2/4] heap: usedJSHeapSize after forced GC, growth between frame 60 and 460
+      ... 8/60 frames, 0s elapsed, 242.4 fps
+      ... 64/460 frames, 1s elapsed, 53.4 fps
+      ... 164/460 frames, 123s elapsed, 1.3 fps
+      ... 267/460 frames, 247s elapsed, 1.1 fps
+      ... 367/460 frames, 351s elapsed, 1.0 fps
+      HEAP_MB=11.661  HEAP_GROWTH_MB=0.172
+[3/4] physics: PHYS_MS over 2000 steps, gates over 90s simulated
+      PHYS_MS=0.1226  ALLOC_PER_STEP=0
+      ESCAPED=0  ENERGY_DRIFT=0%  LOBE_CHANGES=150
+[4/4] screenshots: 3 poses at simulation step 300
+      SSIM front = 0.99935
+      SSIM oblique = 0.99856
+      SSIM close = 1
+
+wrote bench/logs/iter-01b.json
+
+GOALS
+  FAIL  FRAME_P95          2527.2 ->    1698.4 (-32.8%)  want <= 0.65x
+  FAIL  DRAWCALLS              67 ->        67 (0.0%)  want <= 0.40x
+  PASS  HEAP_GROWTH_MB      0.039 ->     0.172 (341.0%)  want < 1 MB
+  PASS  ALLOC_FRAME             0 ->         0  want == 0
+NON-REGRESSION GATES
+  PASS  ESCAPED                    0  want == 0
+  PASS  ENERGY_DRIFT_PCT           0  want < 0.01
+  PASS  LOBE_CHANGES             150  want >= 120
+  PASS  SSIM_MIN             0.99856  want >= 0.98
+
+VERDICT: gates PASS

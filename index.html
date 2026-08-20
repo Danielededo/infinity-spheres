@@ -159,7 +159,10 @@ const CONF = {
   speedMax: 12.0,
   swirl: 0.35,        // transverse share of the initial velocity
   restitution: 1.0,   // 1 = perfectly elastic, for marbles and for the wall
-  tubularSegments: 1000,
+  // 1000 was ~8x more than the picture needs. SSIM against the reference
+  // screenshots holds at 0.9926 here, and only falls under the 0.98 gate below
+  // 45 segments; 125 keeps real margin instead of sitting on the boundary.
+  tubularSegments: 125,
   radialSegments: 56,
 };
 
