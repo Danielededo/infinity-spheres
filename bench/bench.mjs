@@ -390,6 +390,17 @@ async function newPage() {
  * stepping the fresh state by wall-clock delta.
  */
 async function freezeAt(page, steps) {
+  // Turn the page's own idle-orbit flag off before touching the keyboard.
+  //
+  // Not belt and braces: pressing Space runs the page's syncUI(), which
+  // re-applies controls.autoRotate = state.spin — so pausing switches the orbit
+  // back on after pose() had turned it off, and the camera then drifts at
+  // 2.4 degrees a second for however long the rest of this function takes. That
+  // duration is wall-clock dependent, so two builds whose startup costs differ
+  // get photographed from different angles. Measured cost of leaving it: SSIM
+  // 0.774 on a revision that is in fact pixel-identical, and a one-off 0.971 on
+  // an unchanged one.
+  await page.evaluate(() => { window.__scene.state.spin = false; });
   await page.keyboard.press('Space');            // pause physics
   await page.waitForTimeout(150);
   await page.keyboard.press('KeyR');             // rebuild marbles, seeded
@@ -439,6 +450,7 @@ if (PHASES.has(1)) {
   const { page, errors } = await newPage();
   await pose(page, POSES[0]);
   await freezeAt(page, CFG.shotFrame);
+  await pose(page, POSES[0]);                           // exact pose while timing
   await waitFrames(page, CFG.warmupFrames);
   const mark = await page.evaluate(() => window.__bench.frames);
   await waitFrames(page, mark + CFG.frames);
@@ -573,19 +585,25 @@ if (PHASES.has(4)) {
     await pose(page, p);
     await page.keyboard.press('KeyH');                  // HUD out of the frame
     await freezeAt(page, CFG.shotFrame);
-    await page.evaluate(() => {
+    await pose(page, p);                                // exact pose at capture
+    // Read the frame out of the canvas rather than asking playwright for a page
+    // screenshot.
+    //
+    // page.screenshot goes through the compositor, and with the render loop
+    // stopped the compositor is in no hurry to produce a frame: it timed out
+    // after two minutes on most runs here, and the workarounds for that (draw
+    // twice, wait 700ms, keep a slow timer-driven loop alive) are all guesses
+    // about someone else's scheduler. toDataURL takes exactly the frame that
+    // was just drawn, in the same task, which is also what the page's own Save
+    // PNG button relies on. No compositor, no font waiting, no animation
+    // heuristics, and nothing left that can vary between runs.
+    const dataUrl = await page.evaluate(() => {
       const B = window.__bench;
-      // Stop the animation loop, then draw by hand. Without this the screenshot
-      // competes with an unthrottled rAF and times out. Two frames, not one:
-      // a single one occasionally gets captured part-painted on a loaded
-      // machine, which showed up once as an SSIM of 0.971 on a pose that reads
-      // 0.998 on every other run.
       B.renderer.setAnimationLoop(null);
       B.renderer.render(B.scene, B.camera);
-      B.renderer.render(B.scene, B.camera);
+      return B.renderer.domElement.toDataURL('image/png');
     });
-    await page.waitForTimeout(700);
-    const shot = await page.screenshot({ timeout: 120000, animations: 'disabled' });
+    const shot = Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64');
     const refPath = path.join(REF_DIR, `${p.name}.png`);
     if (WRITE_REF) {
       fs.mkdirSync(REF_DIR, { recursive: true });
