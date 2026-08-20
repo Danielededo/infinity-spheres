@@ -24,7 +24,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # No `enablement: true` here on purpose: creating the Pages site needs
       # repo-admin rights, which the workflow's GITHUB_TOKEN does not have even
@@ -32,13 +32,13 @@ jobs:
       # Resource not accessible by integration"). Pages has to be switched on
       # once by hand; after that this step just reads the existing config.
       - name: Setup Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: .
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
