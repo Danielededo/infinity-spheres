@@ -295,20 +295,30 @@ function decodePNG(buf) {
   return { w, h, channels, data: out };
 }
 
-const toGray = (img) => {
+/* Pull one plane out of an image: 0, 1, 2 for R, G, B, or -1 for luminance.
+ *
+ * Luminance alone is not enough, which was measured rather than assumed.
+ * Shifting one palette hue by 0.08 at constant saturation and lightness — a
+ * plainly different colour — scored 0.99999 on a luminance-only comparison and
+ * sailed through the gate. Chroma barely moves the luma channel, so a metric
+ * built on it is blind to exactly the kind of change the palette is made of. */
+const plane = (img, ch) => {
   const g = new Float64Array(img.w * img.h);
   const c = img.channels;
-  for (let i = 0, p = 0; i < g.length; i++, p += c) {
-    g[i] = 0.299 * img.data[p] + 0.587 * img.data[p + 1] + 0.114 * img.data[p + 2];
+  if (ch < 0) {
+    for (let i = 0, p = 0; i < g.length; i++, p += c) {
+      g[i] = 0.299 * img.data[p] + 0.587 * img.data[p + 1] + 0.114 * img.data[p + 2];
+    }
+  } else {
+    for (let i = 0, p = 0; i < g.length; i++, p += c) g[i] = img.data[p + ch];
   }
   return g;
 };
 
 /** Mean SSIM over 8x8 windows, the standard C1/C2 stabilisers. */
-function ssim(aBuf, bBuf) {
-  const A = decodePNG(aBuf), Bi = decodePNG(bBuf);
-  if (A.w !== Bi.w || A.h !== Bi.h) throw new Error(`size mismatch ${A.w}x${A.h} vs ${Bi.w}x${Bi.h}`);
-  const a = toGray(A), b = toGray(Bi);
+/** SSIM over one plane of an already-decoded pair. */
+function ssimPlane(A, Bi, ch) {
+  const a = plane(A, ch), b = plane(Bi, ch);
   const C1 = (0.01 * 255) ** 2, C2 = (0.03 * 255) ** 2;
   const win = 8;
   let sum = 0, n = 0;
@@ -332,6 +342,20 @@ function ssim(aBuf, bBuf) {
     }
   }
   return sum / n;
+}
+
+/* The reported figure is the *worst* of luminance and the three colour
+ * channels. Luminance carries structure; the channels are what notice a hue
+ * moving. Taking the minimum means a change has to leave all four alone to
+ * pass, and costs four passes over a 320x200 image, which is nothing. */
+function ssim(aBuf, bBuf) {
+  const A = decodePNG(aBuf), Bi = decodePNG(bBuf);
+  if (A.w !== Bi.w || A.h !== Bi.h) throw new Error(`size mismatch ${A.w}x${A.h} vs ${Bi.w}x${Bi.h}`);
+  const parts = { luma: ssimPlane(A, Bi, -1), r: ssimPlane(A, Bi, 0),
+                  g: ssimPlane(A, Bi, 1), b: ssimPlane(A, Bi, 2) };
+  const worst = Math.min(parts.luma, parts.r, parts.g, parts.b);
+  ssim.last = parts;
+  return worst;
 }
 
 /* ------------------------------------------------------------------ *
@@ -620,7 +644,10 @@ if (PHASES.has(4)) {
       log(`      wrote reference ${path.relative(ROOT, refPath)}`);
     } else if (fs.existsSync(refPath)) {
       ssims[p.name] = +ssim(fs.readFileSync(refPath), shot).toFixed(5);
-      log(`      SSIM ${p.name} = ${ssims[p.name]}`);
+      const q = ssim.last;
+      log(`      SSIM ${p.name} = ${ssims[p.name]}`
+        + `  (luma ${q.luma.toFixed(5)} r ${q.r.toFixed(5)}`
+        + ` g ${q.g.toFixed(5)} b ${q.b.toFixed(5)})`);
     } else {
       ssims[p.name] = null;
       log(`      no reference for ${p.name} (run once with --write-ref)`);
