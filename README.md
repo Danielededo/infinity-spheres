@@ -6,7 +6,8 @@
 [![three.js](https://img.shields.io/badge/three.js-0.169.0-black.svg)](https://threejs.org/)
 
 A [Three.js](https://threejs.org/) scene in a **single `index.html`**: a closed **glass tube swept
-along a self-intersecting curve**, with 30 marbles of different colours and shades loose inside it.
+along a self-intersecting curve**, with marbles of different colours and shades loose inside it — 30
+of them by default, and anywhere from 2 to 40.
 The marbles fly freely in 3D, bounce elastically off each other and off the inner wall of the tube,
 and pass through the open junctions where the tube crosses itself.
 
@@ -126,14 +127,14 @@ physics — nothing here knows which curve it is.
 The nearest point comes from a polyline of evenly spaced samples — 300 on the lemniscate, 443 and 487
 on the longer spines — then a projection onto the two chords touching the winning sample, which turns
 the sampling error from `O(step)` into `O(step²·curvature)`. Brute force for 30 marbles costs about
-0.15 ms per step, so there is no spatial index.
+0.16 ms per step, so there is no spatial index.
 
-That last figure was 0.10 ms before the spine became switchable, and the 50% is worth naming rather
+That last figure was 0.10 ms before the spine became switchable, and the 60% is worth naming rather
 than hiding. With a fixed curve the sample count was a compile-time constant and the engine could
 unroll the loop against it; as a value a spine change can alter, it cannot. Freezing the count back
 recovers most of the gap (0.81 µs per call against 1.11, from a 0.73 baseline). Getting it properly
 would mean generating a specialised copy of the loop per curve at run time, which is not a trade
-worth making here. In proportion it is 0.6% of a 60fps frame budget against 0.9%.
+worth making here. In proportion it is 0.6% of a 60fps frame budget against 1.0%.
 
 **Sub-steps.** Elastic impacts between unequal masses hand a lot of speed to the light marbles — they
 pass 39 units/s. Each frame is split so that no marble moves more than `0.45·rMin` per sub-step,
@@ -149,13 +150,26 @@ checking after every frame:
 | Check | Result |
 | --- | --- |
 | Marble outside the glass | worst excursion `1.8e-15` — never |
-| Marbles crossing between branches | 149–175 per run |
+| Marbles crossing between branches | 155–188, five runs |
 | Total energy, `restitution = 1` | drift 0.000000% |
 | Allocation per step | 0 |
-| Physics cost | 0.15 ms/step |
+| Physics cost | 0.16 ms/step |
 
 Containment is re-checked **per spine**, not only on the default one — see
 [Other spines](#other-spines) for all three.
+
+The crossing count is the one figure here that moves between runs, and it is worth saying why rather
+than quoting an average. The harness pauses the page and then drives `step()` itself, but the page has
+already been running on wall-clock deltas for however long the load took, so the state the count starts
+from depends on how many real frames fitted into that moment. Five runs of identical code gave 155, 159,
+170, 179 and 188. That is why the gate is a floor — 120 — and not an equality: what it asserts is that
+marbles still pass between the branches in quantity, which is the thing that would go to zero if a
+junction ever sealed. The other four rows are exact and repeat to the digit.
+
+Loading the page with `#s=0` removes the variance entirely — the time scale starts at zero, so nothing
+advances until the measurement asks it to — which is how the per-spine table below gets identical
+numbers across runs and how `npm run preview` produces identical bytes. Teaching the harness the same
+trick would tighten `LOBE_CHANGES` from a floor into an equality, and is the obvious next change to it.
 
 One known approximation, measured: `TubeGeometry` is a 56-gon inscribed in the true cylinder, so its
 flat faces sit at `2.3962` instead of `2.4`. A marble pressed against the analytic wall can therefore
@@ -171,10 +185,35 @@ defect as acceptable is a good way to stop looking at it.
 - Equirectangular environment **generated at runtime** on a `<canvas>` (gradient plus soft light
   blobs) and prefiltered with `PMREMGenerator`: glass and polished marbles get something to reflect
   and refract without downloading an HDRI.
-- Hues spread over the whole colour wheel (`hue = i/n`), with saturation, lightness, `metalness`,
-  `roughness` and `clearcoat` all varied per marble.
+- **Six hues, not the whole wheel.** The hues used to be `i/n`, an even sweep of the colour circle.
+  Thirty marbles spaced evenly around it read as a test pattern: every hue present, none chosen, and
+  the muddy yellow-greens between the good colours getting equal billing. There are six now — coral,
+  amber, jade, cyan, deep blue, violet — unevenly spaced, each with its own saturation and lightness
+  window, because what looks right varies with hue: the amber has to be brighter and more saturated
+  than the deep blue to read as the same weight against a dark ground. Each is jittered slightly so
+  two marbles of one hue are not identical.
+- The swatch is **hashed from the marble index**, not cycled. Marbles are seeded evenly along the
+  spine by index, so `i % 6` would put the same colour at the same spacing all the way round — six
+  colours in strict rotation, which looks mechanical and breaks when the count is not a multiple of
+  six. The hash costs no random draw, so the arrangement and the velocities are bit-for-bit what they
+  were and only the colours moved.
+- `metalness`, `roughness`, `clearcoat` and `clearcoatRoughness` are varied per marble as well.
+- **All the marbles are one `InstancedMesh`.** Thirty separate meshes cost thirty draw calls in the
+  colour pass, thirty more filling the shadow map, and thirty more again in the extra pass the
+  glass's transmission forces — which is where nearly all of the frame's draw calls were going. An
+  `InstancedMesh` carries one material, though, and these marbles differ in finish as well as in
+  colour: colour rides along per-instance for free (`instanceColor`), and the other four values go in
+  as an instanced `vec4` patched into the standard physical shader with `onBeforeCompile`. So it is
+  still the picture that was there before, not forty identically polished balls — and the SSIM gate
+  is what keeps that claim honest. Measured: 67 draw calls down to **9**, and the frame time on the
+  CPU rasteriser the harness runs on down by 65%.
 - Key light with `PCFSoft` shadows, rim light, two coloured point lights, exponential fog,
   `ACESFilmicToneMapping`, pixel ratio capped at 2.
+- A **quality switch** (**Quality** / <kbd>Q</kbd>) trades the two things that cost the most on a
+  weak GPU: *fast* drops the pixel ratio to 1 and turns the shadow map off, *high* restores both.
+  It defaults to *fast* on a coarse pointer — a phone — and to *high* elsewhere, and it is the one
+  setting always written into the URL hash, because a link that left it out would not reproduce on
+  another machine.
 - `OrbitControls` with damping and a slow auto-orbit.
 
 ## Controls
@@ -191,6 +230,7 @@ defect as acceptable is a good way to stop looking at it.
 | Auto-orbit | **Spin** | <kbd>A</kbd> |
 | Reset (new colours and velocities) | **Reset** | <kbd>R</kbd> |
 | Ride the selected marble | **Ride a marble** | <kbd>F</kbd> |
+| Quality: high ⇄ fast | **Quality** | <kbd>Q</kbd> |
 | Inspect a marble | click it | — |
 | Fold the panel away | **▲ / ▼** | <kbd>M</kbd> |
 | Show/hide the HUD | — | <kbd>H</kbd> |
@@ -199,8 +239,9 @@ Four sliders: **Speed** scales time from 0 to 3×, **Marbles** from 2 to 40, **S
 range from 0.5× to 1.4×, and **Elastic** sets the restitution from 0.8 to 1. Changing the count or the
 size rebuilds the marbles; the other two take effect live.
 
-Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), the three camera poses the
-benchmark uses, a PNG export, and **Copy link**.
+Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), three of the four camera
+poses the benchmark uses — the fourth sits close inside the junction and is there to be a hard case for
+the gate, not a nice view — a PNG export, and **Copy link**.
 
 ### Other spines
 
@@ -216,10 +257,22 @@ other at distant arc positions. Both are curve-agnostic, so a new spine needs no
 | Clover | 3 | 86.6° | 155.0 | 1.90 R | 67 |
 
 All three are scaled to the same bounding radius, so the camera framing does not change between them.
-Measured over 60 simulated seconds each: no marble ever leaves the tube (worst excursion 1.8e-15,
-1.6e-15 and 1.3e-15 — floating-point noise), energy holds at 0.000000%, and junction crossings roughly
-double on the three-junction spines (392 and 383 against 198), so marbles really do pass through the new
-junctions rather than getting wedged in them.
+Measured with the harness's own gate loop — 90 simulated seconds, three runs per spine, containment
+re-checked every frame:
+
+| spine | crossings | escapes | worst excursion | energy drift |
+| --- | --- | --- | --- | --- |
+| Lemniscate | 154 | 0 | `1.78e-15` | 0.000000% |
+| Trefoil | 289 | 0 | `1.78e-15` | 0.000000% |
+| Clover | 286 | 0 | `2.00e-15` | 0.000000% |
+
+Three runs per spine, and every column repeated exactly — the page is loaded with `#s=0` so its own
+animation loop cannot advance the simulation before the measurement starts, which is what makes the
+crossing count reproducible here and not in the harness. The excursions are floating-point noise at the
+scale of the coordinates, not near-misses. Crossings run about 1.9 times higher on the three-junction
+spines, which is the number that matters: marbles really do pass through the new junctions rather than
+getting wedged in them, and a junction that had silently sealed would show up here as a collapse, not a
+wobble.
 
 Most candidate curves fail, and it is worth knowing why:
 
@@ -361,14 +414,28 @@ npm run serve        # http://localhost:8000
 npm run check        # pinned versions agree, structural tags balance
 npm run bench:gates  # physics non-regression gates, ~1 min
 npm run bench        # full measurement, writes bench/metrics.json, ~12 min
+npm run preview      # re-render docs/preview.png, the hero image above
 ```
+
+`npm run preview` is deterministic — same seed, same fixed number of simulation steps, the page loaded
+with the time scale at zero so its own animation loop cannot advance anything while the module loads.
+Rerun it and the bytes are identical; rerun it after a rendering change and the diff *is* the rendering
+change. Getting there took two fixes worth knowing about, because both apply to anything that screenshots
+this page: the idle orbit has to be stopped and the camera parked in the same evaluation as the render,
+or damping slides the view between the two; and the scene has to be rendered **twice**, because
+`transmission: 1` refracts a render target that is filled during a render, so the first render after the
+camera moves shows the glass a backdrop drawn from where the camera used to be. Without the second
+render, two runs of identical code differed across 6.9% of pixels.
 
 `npm run check` and `npm run bench:gates` are what CI runs on every push and pull request. The gates
 assert that no marble ever ends a step outside the glass, that kinetic energy does not drift with
-`restitution: 1`, and that marbles still cross between lobes. The render metrics are deliberately not
-gated in CI — frame time carries ~27% run-to-run variance on a CPU rasteriser, and the SSIM
-references were rendered on a different machine. See [`bench/README.md`](bench/README.md) for what
-the harness can and cannot resolve.
+`restitution: 1`, and that marbles still cross between lobes — a floor, not an equality, for the reason
+given above. The render metrics are deliberately not gated in CI: frame time carries ~27% run-to-run
+variance on a CPU rasteriser, and the reference screenshots are rendered on the maintainer's machine
+rather than on the runner, so both would be flaky rather than informative. Locally, on the machine the
+references came from, SSIM is exactly 1 at all four poses — which is what makes it worth running there,
+since any deviation at all is then a real change. See [`bench/README.md`](bench/README.md) for what the
+harness can and cannot resolve.
 
 Three.js is pinned in two places, `index.html`'s importmap and `package.json`'s devDependency. They
 must match; `npm run check` fails if they drift.
