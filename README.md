@@ -171,7 +171,7 @@ checking after every frame:
 | Check | Result |
 | --- | --- |
 | Marble outside the glass | worst excursion `1.8e-15` — never |
-| Marbles crossing between branches | 155–188, five runs |
+| Marbles crossing between branches | 154, exactly, every run |
 | Total energy, `restitution = 1` | drift 0.000000% |
 | Allocation per step | 0 |
 | Physics cost, 30 marbles | 0.073 ms/step |
@@ -179,18 +179,24 @@ checking after every frame:
 Containment is re-checked **per spine**, not only on the default one — see
 [Other spines](#other-spines) for all three.
 
-The crossing count is the one figure here that moves between runs, and it is worth saying why rather
-than quoting an average. The harness pauses the page and then drives `step()` itself, but the page has
-already been running on wall-clock deltas for however long the load took, so the state the count starts
-from depends on how many real frames fitted into that moment. Five runs of identical code gave 155, 159,
-170, 179 and 188. That is why the gate is a floor — 120 — and not an equality: what it asserts is that
-marbles still pass between the branches in quantity, which is the thing that would go to zero if a
-junction ever sealed. The other four rows are exact and repeat to the digit.
+That crossing count used to be the one figure here that moved between runs — five runs of identical
+code gave 155, 159, 170, 179 and 188 — and it is worth recording why, because the cause was in the
+harness rather than in the page. The gate loop started from wherever two things had left the
+simulation: the page's own animation loop, which advances it on wall-clock deltas for however long the
+module takes to load, and the 2020 steps the `PHYS_MS` measurement drives just before. The first is not
+reproducible and the second amplifies it.
 
-Loading the page with `#s=0` removes the variance entirely — the time scale starts at zero, so nothing
-advances until the measurement asks it to — which is how the per-spine table below gets identical
-numbers across runs and how `npm run preview` produces identical bytes. Teaching the harness the same
-trick would tighten `LOBE_CHANGES` from a floor into an equality, and is the obvious next change to it.
+The fix was one keystroke. Phase 4 already pressed **R** before capturing — a rebuild from the seeded
+stream — which is why the screenshots were exactly reproducible while this was not. The gate loop does
+the same now, so its 90 seconds start from a scene that is always identical, and the count is **154 on
+the lemniscate, three runs out of three**. It also matches, to the digit, an independent measurement of
+the same 90 seconds taken a different way — which is the sort of agreement that makes a number worth
+trusting.
+
+So the floor moved from 120 to 150. It stays a floor rather than an equality, because a deliberate
+physics change should not have to edit a magic number, and higher is never the failure being guarded
+against — the rosettes score 289 and 286. But a junction quietly sealing, or marbles wedging in one,
+now fails on a drop of five rather than having to lose a third of the traffic first.
 
 One known approximation, measured: `TubeGeometry` is a 56-gon inscribed in the true cylinder, so its
 flat faces sit at `2.3962` instead of `2.4`. A marble pressed against the analytic wall can therefore
@@ -542,10 +548,39 @@ or damping slides the view between the two; and the scene has to be rendered **t
 camera moves shows the glass a backdrop drawn from where the camera used to be. Without the second
 render, two runs of identical code differed across 6.9% of pixels.
 
+### What the visual gate does and does not see
+
+`SSIM_MIN` compares *structure*, and it turns out that is not enough for a scene whose most variable
+feature is the colour of a few hundred spheres. Measured by running the harness against deliberately
+altered pages:
+
+| change | SSIM_MIN | | CHROMA_MAX | |
+| --- | --- | --- | --- | --- |
+| nothing changed | 1 | pass | **0** | pass |
+| every hue +0.02 | 0.99793 | pass | 0.9008 | **FAIL** |
+| every hue +0.08 | 0.9845 | pass | 3.1793 | **FAIL** |
+| roughness +0.05 | 0.99929 | pass | 0.1163 | **FAIL** |
+
+Three real changes to how the marbles look, all three waved through by SSIM — the most extreme of them
+clearing the 0.98 threshold by 0.0045 — because the marbles stay in the same places with the same
+shading and simply wear different colours, which is precisely what SSIM forgives.
+
+`CHROMA_MAX` closes that. It is the mean of `|Δ(R−G)|` and `|Δ(B−G)|` over the frame: a shading change
+moves all three channels together and cancels in both differences, while a colour change does not.
+Unmodified code scores exactly zero rather than nearly zero, which is what lets the threshold be as
+tight as 0.05.
+
+What it still does not do: both metrics average over the whole frame, and the marbles occupy 8% to 19%
+of it depending on the pose — measured by hiding them and counting the pixels that move, with
+`junction` densest and `oblique` sparsest. Hiding the glass makes that *worse* rather than better,
+because refraction spreads each marble's influence well beyond its own silhouette, which is why there
+is no glass-free pose. So a change to one marble in one place is still diluted; what is now covered is
+a change to how the marbles look in general.
+
 `npm run check` and `npm run bench:gates` are what CI runs on every push and pull request. The gates
 assert that no marble ever ends a step outside the glass, that kinetic energy does not drift with
-`restitution: 1`, and that marbles still cross between lobes — a floor, not an equality, for the reason
-given above. The render metrics are deliberately not gated in CI: frame time carries ~27% run-to-run
+`restitution: 1`, and that marbles still cross between lobes — a floor of 150 against a reproducible
+154, for the reason given above. The render metrics are deliberately not gated in CI: frame time carries ~27% run-to-run
 variance on a CPU rasteriser, and the reference screenshots are rendered on the maintainer's machine
 rather than on the runner, so both would be flaky rather than informative. Locally, on the machine the
 references came from, SSIM is exactly 1 at all four poses — which is what makes it worth running there,

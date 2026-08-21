@@ -45,15 +45,38 @@ Every hook is injected by the harness:
 | `ALLOC_PER_STEP` | `Vector3` constructions per physics step |
 | `ESCAPED`, `ENERGY_DRIFT_PCT`, `LOBE_CHANGES` | physics gates over 90 simulated seconds |
 | `SSIM` | per-pose SSIM against `bench/ref/*.png`, worst of four planes |
+| `CHROMA` | per-pose mean colour-opponent difference against the same references |
 
 `SSIM` is the **minimum** of four separate comparisons — luminance, R, G and B —
 not a single grayscale one. Luminance alone was measured to be blind to the
-change it most needed to catch: shifting one palette hue by 0.08 at constant
-saturation and lightness, a plainly different colour, scored 0.99999 and passed.
-Four planes bring the same shift to 0.99917, which still passes at the 0.98
-threshold, so the honest statement is that the gate catches geometry and shading
-reliably and colour only when it moves a lot. A metric weighted toward the
-marbles, or a reference image larger than 320x200, is what that needs.
+change it most needed to catch: shifting every palette hue by 0.08 at constant
+saturation and lightness, a plainly different set of colours, scored 0.99999 and
+passed. Four planes brought the same shift to 0.9845, which *still* passes the
+0.98 threshold — by 0.0045.
+
+So SSIM does not gate colour, and `CHROMA_MAX` is there because of it. It is the
+mean of |Δ(R−G)| and |Δ(B−G)| over the frame: a shading change moves all three
+channels together and cancels, a colour change does not. Every row below is a
+full phase-4 run against a deliberately altered page:
+
+| change | SSIM_MIN | | CHROMA_MAX | |
+| --- | --- | --- | --- | --- |
+| nothing changed | 1 | pass | **0** | pass |
+| every hue +0.02 | 0.99793 | pass | 0.9008 | **FAIL** |
+| every hue +0.08 | 0.9845 | pass | 3.1793 | **FAIL** |
+| roughness +0.05 | 0.99929 | pass | 0.1163 | **FAIL** |
+
+Three real changes to how the marbles look, all three waved through by SSIM and
+all three caught by chroma. Unmodified code scores exactly zero rather than
+nearly zero, which is what lets the threshold be as tight as 0.05.
+
+Worth being clear about what this does *not* fix: both metrics still average over
+the whole frame, and the marbles occupy 8% to 19% of it depending on the pose
+(`junction` is the densest, `oblique` the sparsest — measured by hiding the
+marbles and counting the pixels that move). Hiding the glass makes that *worse*,
+not better, because refraction spreads each marble's influence well beyond its
+own silhouette. So a change to one marble in one place is still diluted; what is
+now covered is a change to how the marbles look in general.
 
 ## Reading FRAME_P95
 
