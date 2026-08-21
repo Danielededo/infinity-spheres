@@ -344,6 +344,16 @@ for the finite difference, once per attempt. And the attempt budget turned out t
 almost no marbles: near saturation whether a marble finds room is luck rather than persistence, so 400
 attempts grant 251 and 4000 grant 264, for seven times the wait.
 
+**Trails are capped at 40 marbles**, whatever the count. Their line buffer is rebuilt on the CPU every
+frame — 47 segments per marble, two vertices each, position and colour — and one draw call does not
+make that free: timed in isolation at 998 marbles, 1.256 ms per frame for all of them against 0.076 ms
+for 40. That is 7.5% of a frame budget spent on something nobody can see, because past a few dozen the
+lines overlap into one bright tangle.
+
+**What is still cheap** is the drawing. At 998 marbles `renderer.render` takes 1.1 ms against 1.3 ms
+at 30 — 2.98 million triangles versus 129 thousand, and 9 draw calls either way. The frame at the
+ceiling is roughly 7.5 ms, and 6.4 of that is physics.
+
 One thing more marbles is not: more of the same. The top-speed column above tells that story — 34
 units at the default, 53 once the tube is full — and the scene becomes a churn rather than marbles
 flying freely down a mostly empty tube. **Packed** and **Shoal** under **more** are the two settings
