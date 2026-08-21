@@ -144,6 +144,8 @@ Two known approximations, both measured:
 | Trails | **Trails** | <kbd>T</kbd> |
 | Auto-orbit | **Spin** | <kbd>A</kbd> |
 | Reset (new colours and velocities) | **Reset** | <kbd>R</kbd> |
+| Ride the selected marble | **Ride a marble** | <kbd>F</kbd> |
+| Inspect a marble | click it | — |
 | Fold the panel away | **▲ / ▼** | <kbd>M</kbd> |
 | Show/hide the HUD | — | <kbd>H</kbd> |
 
@@ -153,6 +155,22 @@ size rebuilds the marbles; the other two take effect live.
 
 Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), the three camera poses the
 benchmark uses, a PNG export, and **Copy link**.
+
+### Riding a marble
+
+Click any marble to select it — the raycast only tests the marbles, so the glass does not shield them
+and you can pick one you can see *through* the tube. The panel then shows its radius, mass and current
+speed, and a soft ring marks it in the scene.
+
+**Ride a marble** puts the camera behind the selected one and points it down the tube. It follows a
+smoothed heading rather than anchoring to the spine: anchoring means reading the nearest point on the
+curve, and at the crossing the nearest branch flips, which would throw the view sideways at exactly the
+interesting moment. The spine is still used, but only as a clamp — if the smoothing would push the eye
+through the glass it gets pulled back toward whichever branch is nearest, and nearest is always inward.
+Measured over a settled run: the eye stays 0.66 to 1.69 units from the spine, inside the 1.90 the clamp
+allows, against a bore radius of 2.4.
+
+`#f=1` in the URL arrives already riding.
 
 ### On a phone
 

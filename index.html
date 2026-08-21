@@ -136,6 +136,8 @@
     font-size: 11.5px;
     color: var(--muted);
   }
+  /* .readout sets display:flex, which outranks the hidden attribute. */
+  .readout[hidden] { display: none; }
   .readout b { color: var(--fg); font-variant-numeric: tabular-nums; font-weight: 620; }
   .readout em { font-style: normal; margin-left: auto; font-size: 10px; opacity: .8; }
 
@@ -284,6 +286,11 @@
     energy <b id="s-energy">0</b><em id="s-energy-note">constant</em>
   </div>
 
+  <!-- Only present once a marble has been clicked. -->
+  <div class="readout" id="sel-box" hidden>
+    marble <b id="sel-id">0</b><em id="sel-info"></em>
+  </div>
+
   <div class="row">
     <label for="speed">Speed</label>
     <input id="speed" type="range" min="0" max="3" step="0.05" value="1" />
@@ -314,6 +321,9 @@
     <button id="btn-trails" aria-pressed="false">Trails</button>
     <button id="btn-spin" aria-pressed="true">Spin</button>
     <button id="btn-reset">Reset</button>
+  </div>
+  <div class="btns">
+    <button id="btn-ride" aria-pressed="false">Ride a marble</button>
   </div>
 
   <details class="more">
@@ -346,12 +356,12 @@
 
   <p class="keys">
     <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>V</kbd> gravity · <kbd>T</kbd> trails ·
-    <kbd>A</kbd> spin · <kbd>R</kbd> reset · <kbd>M</kbd> menu · <kbd>H</kbd> hide
+    <kbd>A</kbd> spin · <kbd>F</kbd> ride · <kbd>R</kbd> reset · <kbd>M</kbd> menu · <kbd>H</kbd> hide
   </p>
   </div>
 </div>
 
-<p id="note">Drag to orbit · scroll to zoom · right-drag to pan</p>
+<p id="note">Drag to orbit · scroll to zoom · right-drag to pan · click a marble to inspect it</p>
 
 <script>
   /* This page is a single file that pulls three.js from a CDN at runtime, so a
@@ -435,6 +445,7 @@ const state = {
   // visitor chose in their own operating system.
   spin: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   heavyOne: false,     // the "one heavy" preset: first marble at max size
+  ride: false,         // camera rides the selected marble instead of orbiting
 };
 
 /* The marbles' randomness runs on its own generator rather than Math.random.
@@ -476,6 +487,7 @@ function readHash() {
   state.glassMode = Math.round(num('x', 0, 2, state.glassMode));
   state.trails = q.get('t') === '1';
   state.heavyOne = q.get('h') === '1';
+  state.ride = q.get('f') === '1';
   state.seed = Math.max(0, Math.floor(num('seed', 0, 4294967295, 0)));
 }
 
@@ -490,6 +502,7 @@ function writeHash() {
   if (state.glassMode !== 0) q.set('x', state.glassMode);
   if (state.trails) q.set('t', '1');
   if (state.heavyOne) q.set('h', '1');
+  if (state.ride) q.set('f', '1');
   if (state.seed) q.set('seed', state.seed);
   const h = q.toString();
   // replaceState rather than assigning location.hash: no history entries, and
@@ -1183,6 +1196,91 @@ function buildMarbles() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Picking a marble, and riding it
+ *
+ * Two features that only make sense together: you point at the marble you want
+ * and then the camera goes and sits behind it.
+ * ------------------------------------------------------------------ */
+let selected = -1;                       // index into marbles, -1 for none
+
+/* The selection marker. An additive shell a shade larger than the marble, so
+ * it reads as a glow around it rather than replacing its colour. Invisible
+ * unless something is selected, and three skips invisible objects, so it costs
+ * nothing in the default scene. */
+const halo = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 24, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x7cc7ff,
+    transparent: true,
+    opacity: 0.2,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  })
+);
+halo.visible = false;
+scene.add(halo);
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+/* The ride camera.
+ *
+ * It sits behind the marble along a smoothed heading and looks past it, rather
+ * than anchoring to the spine: anchoring means reading the nearest point on the
+ * curve, and at the crossing the nearest branch flips, which would throw the
+ * eye sideways exactly where the interesting bit is.
+ *
+ * The spine is still used, but only as a clamp — if the smoothing would put the
+ * eye through the glass it gets pulled back toward whichever branch is nearest,
+ * and "nearest" is always inward, so a branch flip there is harmless. */
+const RIDE = { back: 4.2, lift: 0.5, ahead: 6.5, turn: 5.0, move: 7.0, clear: 0.5 };
+const rideDir = new THREE.Vector3(0, 0, 1);
+const rideAt = new THREE.Vector3();
+const rideEye = new THREE.Vector3();
+const rideTmp = new THREE.Vector3();
+
+function rideCamera(dt) {
+  const m = marbles[selected >= 0 && selected < marbles.length ? selected : 0];
+  if (!m) return;
+
+  // Exponential smoothing, so the feel does not change with the frame rate.
+  const kTurn = 1 - Math.exp(-RIDE.turn * dt);
+  const kMove = 1 - Math.exp(-RIDE.move * dt);
+
+  if (m.vel.lengthSq() > 1e-8) {
+    rideTmp.copy(m.vel).normalize();
+    rideDir.lerp(rideTmp, kTurn).normalize();
+  }
+
+  rideEye.copy(m.pos).addScaledVector(rideDir, -RIDE.back);
+  rideEye.y += RIDE.lift;
+
+  const n = nearestOnSpine(rideEye.x, rideEye.y, rideEye.z);
+  const room = R - RIDE.clear;
+  if (n.d > room) {
+    const t = room / n.d;
+    rideEye.set(
+      n.qx + (rideEye.x - n.qx) * t,
+      n.qy + (rideEye.y - n.qy) * t,
+      n.qz + (rideEye.z - n.qz) * t,
+    );
+  }
+
+  camera.position.lerp(rideEye, kMove);
+  rideAt.copy(m.pos).addScaledVector(rideDir, RIDE.ahead);
+  camera.lookAt(rideAt);
+}
+
+function updateHalo() {
+  const m = selected >= 0 && selected < marbles.length ? marbles[selected] : null;
+  halo.visible = !!m;
+  if (m) {
+    halo.position.copy(m.pos);
+    halo.scale.setScalar(m.r * 1.16);
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Marble against marble: 3D elastic impulse along the line of centres.
  *   j = -(1 + e)·(v_rel · n) / (1/m₁ + 1/m₂)
  * ------------------------------------------------------------------ */
@@ -1329,7 +1427,11 @@ renderer.setAnimationLoop(() => {
     step(dt);
     if (state.trails) { recordTrails(); updateTrails(); }
   }
-  controls.update();
+  // Riding drives the camera directly, so OrbitControls must not also run:
+  // update() re-derives the position from its own spherical state and would
+  // undo this every frame.
+  if (state.ride) rideCamera(dt); else controls.update();
+  updateHalo();
   renderer.render(scene, camera);
 
   // Real elapsed time, not the clamped step: otherwise a slow machine would
@@ -1341,6 +1443,8 @@ renderer.setAnimationLoop(() => {
     ui.wall.textContent = wallHits.toLocaleString('en-US');
     const e = totalEnergy();
     ui.energy.textContent = e.toFixed(2);
+    const sm = selected >= 0 && selected < marbles.length ? marbles[selected] : null;
+    if (sm) selInfo.textContent = `r ${sm.r.toFixed(2)} · m ${sm.m.toFixed(2)} · v ${sm.vel.length().toFixed(1)}`;
     // Drift against the value at the last rebuild. At restitution 1 this stays
     // at zero; below 1 it falls, which is the point of the slider.
     const drift = energy0 ? ((e - energy0) / energy0) * 100 : 0;
@@ -1360,8 +1464,9 @@ const hud = $('hud');
 const btn = {
   pause: $('btn-pause'), glass: $('btn-glass'), gravity: $('btn-gravity'),
   trails: $('btn-trails'), spin: $('btn-spin'), reset: $('btn-reset'),
-  menu: $('btn-menu'),
+  menu: $('btn-menu'), ride: $('btn-ride'),
 };
+const selBox = $('sel-box'), selId = $('sel-id'), selInfo = $('sel-info');
 const sliders = {
   speed: $('speed'), count: $('count'), size: $('size'), elastic: $('elastic'),
 };
@@ -1390,6 +1495,15 @@ function syncUI({ rebuild = false } = {}) {
   btn.gravity.setAttribute('aria-pressed', String(state.gravity > 0));
   btn.trails.setAttribute('aria-pressed', String(state.trails));
   btn.spin.setAttribute('aria-pressed', String(state.spin));
+  btn.ride.setAttribute('aria-pressed', String(state.ride));
+  btn.ride.textContent = state.ride ? 'Stop riding' : 'Ride a marble';
+
+  const m = selected >= 0 && selected < marbles.length ? marbles[selected] : null;
+  selBox.hidden = !m;
+  if (m) {
+    selId.textContent = String(selected);
+    selInfo.textContent = `r ${m.r.toFixed(2)} · m ${m.m.toFixed(2)} · v ${m.vel.length().toFixed(1)}`;
+  }
 
   controls.autoRotate = state.spin;
   applyGlassMode();
@@ -1403,6 +1517,7 @@ function syncUI({ rebuild = false } = {}) {
 function restart() {
   buildMarbles();
   energy0 = totalEnergy();
+  selected = -1;                         // indices mean nothing after a rebuild
 }
 
 /* Folding the panel away.
@@ -1422,6 +1537,43 @@ function setMenu(open) {
 }
 setMenu(!NARROW.matches);
 btn.menu.addEventListener('click', () => setMenu(hud.classList.contains('collapsed')));
+
+/** Enter or leave ride mode, handing the camera over cleanly in both
+ *  directions. Coming back, OrbitControls has to be told where it is looking:
+ *  it derives its spherical state from position minus target, and the ride
+ *  camera has been pointing wherever the marble went. */
+function setRide(on) {
+  state.ride = on;
+  controls.enabled = !on;
+  camTouched = true;                     // a resize must not re-frame this
+  if (on) {
+    if (selected < 0 && marbles.length) selected = 0;
+    rideDir.copy(marbles[selected] ? marbles[selected].vel : rideDir).normalize();
+  } else {
+    controls.target.set(0, 0, 0);
+    controls.update();
+  }
+  syncUI();
+}
+
+btn.ride.addEventListener('click', () => setRide(!state.ride));
+
+/* Click a marble to select it. Only the marbles are raycast, so the glass does
+ * not shield them — clicking one you can see through the tube works, which is
+ * most of them. A press that moved or lingered was an orbit drag, not a pick. */
+let downX = 0, downY = 0, downAt = 0;
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  downX = e.clientX; downY = e.clientY; downAt = performance.now();
+});
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (performance.now() - downAt > 350) return;
+  if (Math.hypot(e.clientX - downX, e.clientY - downY) > 5) return;
+  pointer.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObject(marbleMesh, false)[0];
+  selected = hit && hit.instanceId !== undefined ? hit.instanceId : -1;
+  syncUI();
+});
 
 btn.pause.addEventListener('click', () => { paused = !paused; syncUI(); });
 btn.glass.addEventListener('click', () => {
@@ -1459,7 +1611,7 @@ sliders.size.addEventListener('input', () => {
 });
 
 const PRESETS = {
-  default:      { marbles: CONF.marbles, sizeScale: 1, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1, glassMode: 0, spin: true },
+  default:      { marbles: CONF.marbles, sizeScale: 1, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1, glassMode: 0, spin: true, ride: false },
   heavy:        { marbles: 24, sizeScale: 0.75, restitution: 1, gravity: 0, trails: false, heavyOne: true, timeScale: 1 },
   swarm:        { marbles: 40, sizeScale: 0.6, restitution: 1, gravity: 0, trails: true, heavyOne: false, timeScale: 1 },
   'marble-run': { marbles: 18, sizeScale: 1.1, restitution: 0.92, gravity: CONF.gravityOn, trails: false, heavyOne: false, timeScale: 1 },
@@ -1521,6 +1673,7 @@ addEventListener('keydown', (e) => {
     case 'KeyV': state.gravity = state.gravity > 0 ? 0 : CONF.gravityOn; energy0 = totalEnergy(); syncUI(); break;
     case 'KeyT': state.trails = !state.trails; syncUI(); break;
     case 'KeyA': state.spin = !state.spin; syncUI(); break;
+    case 'KeyF': setRide(!state.ride); break;
     case 'KeyR': restart(); writeHash(); break;
     case 'KeyM': setMenu(hud.classList.contains('collapsed')); break;
     case 'KeyH': hud.classList.toggle('hidden'); break;
@@ -1537,6 +1690,7 @@ addEventListener('resize', () => {
 });
 
 restart();
+if (state.ride) setRide(true);           // a shared link can arrive riding
 syncUI();
 
 // The scene is built and the loop is running, so the loading overlay has done
@@ -1550,7 +1704,7 @@ if (boot) {
 
 // exposed for the automated checks in the repository's test notes
 window.__scene = { curve, marbles, nearestOnSpine, step, totalEnergy, state, R, LENGTH, SAMPLES,
-                   droppedFaces, trim, CONF, renderer, scene, camera, controls,
+                   droppedFaces, trim, CONF, renderer, scene, camera, controls, setRide,
                    boundRadius: BOUND_R, marbleMesh };
 </script>
 </body>
