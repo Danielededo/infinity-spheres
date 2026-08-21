@@ -44,7 +44,16 @@ Every hook is injected by the harness:
 | `ALLOC_FRAME` | median `Vector3` constructions per frame |
 | `ALLOC_PER_STEP` | `Vector3` constructions per physics step |
 | `ESCAPED`, `ENERGY_DRIFT_PCT`, `LOBE_CHANGES` | physics gates over 90 simulated seconds |
-| `SSIM` | per-pose SSIM against `bench/ref/*.png` |
+| `SSIM` | per-pose SSIM against `bench/ref/*.png`, worst of four planes |
+
+`SSIM` is the **minimum** of four separate comparisons — luminance, R, G and B —
+not a single grayscale one. Luminance alone was measured to be blind to the
+change it most needed to catch: shifting one palette hue by 0.08 at constant
+saturation and lightness, a plainly different colour, scored 0.99999 and passed.
+Four planes bring the same shift to 0.99917, which still passes at the 0.98
+threshold, so the honest statement is that the gate catches geometry and shading
+reliably and colour only when it moves a lot. A metric weighted toward the
+marbles, or a reference image larger than 320x200, is what that needs.
 
 ## Reading FRAME_P95
 
@@ -72,15 +81,35 @@ far outside the harness's noise. 0.180.0, by contrast, measured pixel-identical 
 1.000), so the regression is somewhere between those two and a future upgrade should bisect that range.
 Physics is unaffected either way.
 
+Both of those were measured before the marbles were instanced and before the `junction` pose existed,
+which is why there are three SSIM values and why the draw-call figures start from 67 rather than
+today's count. The conclusion still holds — a rendering regression that large is not going to have
+been an artefact of the draw-call path — but the numbers are a record of that experiment, not
+current readings.
+
 A three upgrade therefore has to change `index.html`'s importmap and `package.json` together, and be
 checked with `npm run bench` before the references are touched.
 
 ## Reference images
 
-`bench/ref/*.png` are the baseline screenshots for the SSIM gate, at three fixed
+`bench/ref/*.png` are the baseline screenshots for the SSIM gate, at four fixed
 camera poses, taken after exactly 300 fixed-size simulation steps with the HUD
 hidden. Regenerate them only when a change to the render is intended:
 
 ```bash
 node bench/bench.mjs --write-ref
 ```
+
+The four poses:
+
+| pose | camera | radius | what it is for |
+| --- | --- | --- | --- |
+| `front` | `6, 12, 48` | 49.8 | the whole figure, the shot the page opens on |
+| `oblique` | `34, 20, 30` | 49.6 | the same figure lit from the side, so shading changes show |
+| `close` | `1, 5, 15` | 15.8 | near enough for one marble's finish to matter |
+| `junction` | `0, 2.7, 5.6` | 6.2 | inside the crossing, where the trim and the clip live |
+
+`junction` is deliberately uncomfortable. An earlier version of it sat at radius 12.3, and at that
+distance a genuinely broken junction rim — the sawtooth left by dropping whole triangles instead of
+clipping them — still scored 0.98993 and passed the gate. Pulled in to 6.2 the same defect scores
+0.95167 and fails. A pose that cannot fail is decoration.

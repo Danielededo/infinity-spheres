@@ -1896,7 +1896,9 @@ for (const b of document.querySelectorAll('[data-curve]')) {
   b.addEventListener('click', () => setCurve(b.dataset.curve));
 }
 
-// The three poses the benchmark uses, which is why they are known to frame well.
+// Three of the four poses the benchmark uses, which is why they are known to
+// frame well. The fourth sits close inside the junction: it exists to give the
+// visual gate something hard to look at, and it is not a view worth offering.
 const POSES = { front: [6, 12, 48], oblique: [34, 20, 30], crossing: [1, 5, 15] };
 for (const b of document.querySelectorAll('[data-pose]')) {
   b.addEventListener('click', () => {
