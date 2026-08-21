@@ -16,7 +16,7 @@
     "bench": "node bench/bench.mjs",
     "bench:gates": "node bench/bench.mjs --phases 3",
     "bench:ref": "node bench/bench.mjs --write-ref",
-    "preview": "node bench/preview.mjs",
+    "figures": "node bench/figures.mjs",
     "serve": "python3 -m http.server 8000"
   },
   "devDependencies": {
