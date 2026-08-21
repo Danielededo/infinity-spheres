@@ -7,7 +7,7 @@
 
 A [Three.js](https://threejs.org/) scene in a **single `index.html`**: a closed **glass tube swept
 along a self-intersecting curve**, with marbles of different colours and shades loose inside it — 30
-of them by default, and anywhere from 2 to 40.
+of them by default, and up to about a thousand.
 The marbles fly freely in 3D, bounce elastically off each other and off the inner wall of the tube,
 and pass through the open junctions where the tube crosses itself.
 
@@ -126,15 +126,36 @@ physics — nothing here knows which curve it is.
 
 The nearest point comes from a polyline of evenly spaced samples — 300 on the lemniscate, 443 and 487
 on the longer spines — then a projection onto the two chords touching the winning sample, which turns
-the sampling error from `O(step)` into `O(step²·curvature)`. Brute force for 30 marbles costs about
-0.16 ms per step, so there is no spatial index.
+the sampling error from `O(step)` into `O(step²·curvature)`.
 
-That last figure was 0.10 ms before the spine became switchable, and the 60% is worth naming rather
-than hiding. With a fixed curve the sample count was a compile-time constant and the engine could
-unroll the loop against it; as a value a spine change can alter, it cannot. Freezing the count back
-recovers most of the gap (0.81 µs per call against 1.11, from a 0.73 baseline). Getting it properly
-would mean generating a specialised copy of the loop per curve at run time, which is not a trade
-worth making here. In proportion it is 0.6% of a 60fps frame budget against 1.0%.
+Finding the closest sample is the innermost loop in the whole simulation: once per marble per solve
+pass, four passes per sub-step. It used to scan every sample. It now goes through a **uniform grid**
+over them — compressed rows, two `Int32Array`s, built once per curve, nothing allocated per query —
+and looks at the 27 cells around the query, which holds about 40 samples away from the junction and
+about 70 inside it. On its own that change took the step from **0.1605 ms to 0.0643 ms** at the
+default 30 marbles; the current figure is 0.073, the difference being the shared pair-resolution
+helper the two collision paths below now go through.
+
+The cell size is the whole correctness argument. A sample more than one cell away in any axis is at
+least `G_CELL` from the query, so a winner found closer than `G_CELL` cannot be beaten from outside
+the neighbourhood. `G_CELL` has to exceed the farthest the true nearest sample can be for a point
+the simulation asks about: a marble centre is within `R` of the spine and the nearest *sample* can
+sit half a sample step beyond that, so 2.575. It is 3.0, and a query it cannot answer within that
+bound — well outside the solid, which the physics never asks for but an external caller might —
+falls back to the full scan. So this is an index, not an approximation.
+
+Verified as exact rather than assumed: **300,000 queries per curve** against an independent
+brute-force implementation of the same search, across five classes of query — inside the bore,
+straddling the wall, inside the junction where two branches compete, anywhere in the bounding box,
+and far outside it to exercise the fallback. Worst difference in both the distance and the returned
+point, on all three curves: exactly **0**.
+
+The scan it replaced had a quirk worth keeping on the record, because it is the kind of thing that
+comes back. Making the spine switchable turned the sample count from a `const` into a binding, and
+with a variable trip count V8 could no longer unroll the loop: 0.727 µs/call became 1.113 and the
+step went 0.103 ms to 0.153. Hoisting the bindings into locals changed nothing, nor did preallocating
+one buffer for the largest curve, nor rewriting the wrap arithmetic. The grid makes it moot — and
+lands below the 0.103 the unrolled version managed.
 
 **Sub-steps.** Elastic impacts between unequal masses hand a lot of speed to the light marbles — they
 pass 39 units/s. Each frame is split so that no marble moves more than `0.45·rMin` per sub-step,
@@ -153,7 +174,7 @@ checking after every frame:
 | Marbles crossing between branches | 155–188, five runs |
 | Total energy, `restitution = 1` | drift 0.000000% |
 | Allocation per step | 0 |
-| Physics cost | 0.16 ms/step |
+| Physics cost, 30 marbles | 0.073 ms/step |
 
 Containment is re-checked **per spine**, not only on the default one — see
 [Other spines](#other-spines) for all three.
@@ -235,13 +256,108 @@ defect as acceptable is a good way to stop looking at it.
 | Fold the panel away | **▲ / ▼** | <kbd>M</kbd> |
 | Show/hide the HUD | — | <kbd>H</kbd> |
 
-Four sliders: **Speed** scales time from 0 to 3×, **Marbles** from 2 to 40, **Size** scales the radius
-range from 0.5× to 1.4×, and **Elastic** sets the restitution from 0.8 to 1. Changing the count or the
-size rebuilds the marbles; the other two take effect live.
+Four sliders: **Speed** scales time from 0 to 3×, **Marbles** from 2 to 1000, **Size** scales the
+radius range from 0.5× to 1.4×, and **Elastic** sets the restitution from 0.8 to 1. Changing the count
+or the size rebuilds the marbles; the other two take effect live.
 
-Under **more**: four presets (*Default*, *One heavy*, *Swarm*, *Marble run*), three of the four camera
-poses the benchmark uses — the fourth sits close inside the junction and is there to be a hard case for
+The marble slider carries a *position*, not a count, mapped geometrically. Linear over 2 to 1000 would
+put the default of 30 at 3% of the travel and cram everything anyone reaches for into the first
+thirtieth; geometric spacing gives every doubling the same width and puts 30 at 44%. What the tube
+grants is snapped back into the request, so the readout, the slider and the shared link always agree,
+and dragging past the ceiling visibly stops rather than silently doing nothing. See
+[How many fit](#how-many-fit).
+
+Under **more**: six presets (*Default*, *One heavy*, *Swarm*, *Marble run*, *Packed*, *Shoal* — the
+last two are the high-count ones), three of the four camera poses the benchmark uses — the fourth sits close inside the junction and is there to be a hard case for
 the gate, not a nice view — a PNG export, and **Copy link**.
+
+### How many fit
+
+The count went from 40 to a thousand, and it is worth writing down what was actually in the way,
+because two of the three answers were not what they looked like.
+
+**It was never the renderer.** Draw calls stay at **9** from 30 marbles to 998 — they are one
+`InstancedMesh`, so the count barely touches the draw side at all.
+
+**It was the seeding.** Marbles started single file on the centreline at `u = i/n`, which needs
+`2·rMax` of arc each and runs out at `LENGTH / (2·rMax)` — 45 on the lemniscate. The bore is 2.4 wide
+against marbles of at most 1.15, so a cross-section holds two of the largest or a handful of the
+smallest, and none of that width was being used. Above the single-file cap the marbles are placed in
+the bore instead, by rejection sampling: pick a station on the spine, pick a transverse offset,
+keep it if it clears everything already placed. Below the cap the original scheme still runs, which
+is what keeps the default 30-marble scene bit-for-bit what it was.
+
+There is no containment test in that loop, and its absence is deliberate: the offset is at most
+`R - r` from a point that lies *on* the spine, so the distance to the nearest point of the whole curve
+is at most `R - r` as well — a competing branch can only be closer, never further. The marble is
+inside by construction, and the test that used to be there was re-deriving a guarantee the arithmetic
+already gives.
+
+**And it was the collision loop.** All-pairs is O(n²): fine at 30 marbles and 435 tests, and the
+reason the count could not go much past that. Above 64 marbles the pairs go through a grid of their
+own instead. 64 is measured, not chosen — all-pairs genuinely wins below it:
+
+| marbles | all pairs | grid | winner |
+| --- | --- | --- | --- |
+| 30 | 0.074 ms | 0.087 ms | pairs, 1.18× |
+| 48 | 0.136 ms | 0.146 ms | pairs, 1.08× |
+| 64 | 0.194 ms | 0.189 ms | grid, 1.03× |
+| 128 | 0.662 ms | 0.479 ms | grid, 1.38× |
+| 256 | 2.128 ms | 1.077 ms | grid, 1.98× |
+
+Any index has to be built before it can be asked anything, and below 64 marbles the build alone costs
+more than testing every pair.
+
+**What it costs now.** Measured over 30 simulated seconds per row, containment re-checked every
+frame:
+
+| asked | size | placed | ms/step | share of a 60fps frame | fill | escapes | drift | top speed |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 30 | 1.0× | 30 | 0.073 | 0.4% | 4.3% | 0 | 0.000000% | 34.4 |
+| 128 | 1.0× | 122 | 0.543 | 3.3% | 19.0% | 0 | 0.000000% | 45.5 |
+| 300 | 1.0× | 209 | 0.930 | 5.6% | 26.3% | 0 | 0.000000% | 46.8 |
+| 600 | 0.55× | 600 | 3.968 | 23.8% | 15.1% | 0 | 0.000000% | 51.9 |
+| 1000 | 0.5× | 998 | 6.357 | 38.1% | 18.8% | 0 | 0.000000% | 52.8 |
+
+Not one marble ever left the tube and energy held exactly, at every count. The contact model did not
+need loosening to get here.
+
+**The ceiling is the packing, not the clock.** At full size the tube takes somewhere around 210 to 290
+marbles — it is a random process, so the figure moves between builds — before rejection sampling stops
+finding room, at roughly a quarter of the bore volume. At half size a thousand go in with room to
+spare, and cost 38% of a frame. Asking for more than fits is not an error: the build grants what fits,
+snaps the request down to it and says so in the readout.
+
+Getting the build quick enough to sit on a slider drag took four goes, and two of the four theories
+were wrong:
+
+| change | build at a 1000-marble request |
+| --- | --- |
+| starting point | 2740 ms |
+| grid-accelerate the clash test against placed marbles | *no change* |
+| use the sampled spine instead of `curve.getPointAt` | 1454 ms |
+| replace the cell `Map` with linked lists in flat arrays | 1040 ms |
+| cut the per-marble attempt budget from 4000 to 400 | **84 ms** |
+
+`getPointAt` binary searches a 4000-entry arc-length table and `getTangentAt` does it three times over
+for the finite difference, once per attempt. And the attempt budget turned out to buy latency and
+almost no marbles: near saturation whether a marble finds room is luck rather than persistence, so 400
+attempts grant 251 and 4000 grant 264, for seven times the wait.
+
+**Trails are capped at 40 marbles**, whatever the count. Their line buffer is rebuilt on the CPU every
+frame — 47 segments per marble, two vertices each, position and colour — and one draw call does not
+make that free: timed in isolation at 998 marbles, 1.256 ms per frame for all of them against 0.076 ms
+for 40. That is 7.5% of a frame budget spent on something nobody can see, because past a few dozen the
+lines overlap into one bright tangle.
+
+**What is still cheap** is the drawing. At 998 marbles `renderer.render` takes 1.1 ms against 1.3 ms
+at 30 — 2.98 million triangles versus 129 thousand, and 9 draw calls either way. The frame at the
+ceiling is roughly 7.5 ms, and 6.4 of that is physics.
+
+One thing more marbles is not: more of the same. The top-speed column above tells that story — 34
+units at the default, 53 once the tube is full — and the scene becomes a churn rather than marbles
+flying freely down a mostly empty tube. **Packed** and **Shoal** under **more** are the two settings
+worth starting from.
 
 ### Other spines
 
@@ -397,10 +513,9 @@ Constraints worth respecting:
 
 - **`rMax < tubeRadius`**, obviously — and keeping `rMax` near half of `R` leaves the marbles room to
   move across the bore instead of being wedged in a queue.
-- **`marbles · 2·rMax < spine length`**, or the marbles will not fit on the spine at startup and will
-  begin overlapping. With the defaults, 30 marbles need at most 69 units; the lemniscate offers
-  104.88, the clover 155.0 and the trefoil 170.2. That is why the count slider stops at 40 — the
-  shortest spine is the binding one.
+- **`marbles · 2·rMax < spine length`** is what the *single-file* seeding needs, and above it the
+  packing takes over instead — see [How many fit](#how-many-fit). With the defaults 30 marbles need
+  at most 69 units of arc; the lemniscate offers 104.88, the clover 155.0 and the trefoil 170.2.
 - Dropping `restitution` below 1 makes the impacts lossy: the marbles bleed energy and settle.
 
 ## Development

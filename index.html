@@ -300,7 +300,7 @@
   </div>
   <div class="row">
     <label for="count">Marbles</label>
-    <input id="count" type="range" min="2" max="40" step="1" value="30" />
+    <input id="count" type="range" min="0" max="1000" step="1" value="436" />
     <output id="count-out">30</output>
   </div>
   <div class="row">
@@ -338,6 +338,8 @@
         <button data-preset="heavy">One heavy</button>
         <button data-preset="swarm">Swarm</button>
         <button data-preset="marble-run">Marble run</button>
+        <button data-preset="packed">Packed</button>
+        <button data-preset="shoal">Shoal</button>
       </div>
     </div>
     <div class="group">
@@ -499,7 +501,7 @@ function readHash() {
     const v = parseFloat(q.get(k));
     return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
   };
-  state.marbles = Math.round(num('n', 2, 40, state.marbles));
+  state.marbles = Math.round(num('n', 2, 1000, state.marbles));
   state.sizeScale = num('z', 0.5, 1.4, state.sizeScale);
   state.restitution = num('e', 0.8, 1, state.restitution);
   state.timeScale = num('s', 0, 3, state.timeScale);
@@ -653,6 +655,26 @@ let BOUND_R = 0;
  *  arithmetic, and it sat 0.4 units *inside* the glass even there. */
 let FLOOR_Y = 0;
 
+/* A uniform grid over the spine samples, so the nearest-sample search does not
+ * have to look at all of them.
+ *
+ * Compressed rows rather than an array of arrays: `gCell[c]` and `gCell[c + 1]`
+ * bracket cell c's slice of `gItem`, which holds sample indices. One Int32Array
+ * pair per curve, rebuilt in buildSpine, no allocation per query.
+ *
+ * The cell size is the whole correctness argument. A sample more than one cell
+ * away in any axis is at least G_CELL from the query, so once the search has
+ * found something closer than G_CELL inside the 27-cell neighbourhood, nothing
+ * outside it can beat that. G_CELL therefore has to exceed the farthest the
+ * true nearest sample can be for a point the simulation cares about: a marble
+ * centre is within R of the spine, and the nearest *sample* can sit half a
+ * sample step beyond that, so R + SAMPLE_STEP/2 = 2.575. 3.0 clears it with
+ * room, and a query the grid cannot answer that cheaply falls back to the full
+ * scan, so the result is exact for any input. */
+const G_CELL = 3.0;
+let gDim = [0, 0, 0], gOrigin = [0, 0, 0];
+let gCell = new Int32Array(0), gItem = new Int32Array(0);
+
 /** Resample the spine for the current curve. Everything downstream that cares
  *  about the shape of the solid reads these bindings, so this is the one place
  *  a curve change has to touch. */
@@ -672,6 +694,42 @@ function buildSpine() {
   }
   BOUND_R += R;
   FLOOR_Y = minY - R;
+  buildSpineGrid();
+}
+
+/** Bin the spine samples into the lookup grid. O(SAMPLES), once per curve. */
+function buildSpineGrid() {
+  let loX = Infinity, loY = Infinity, loZ = Infinity;
+  let hiX = -Infinity, hiY = -Infinity, hiZ = -Infinity;
+  for (let i = 0; i < SAMPLES; i++) {
+    const k = 3 * i, x = spine[k], y = spine[k + 1], z = spine[k + 2];
+    if (x < loX) loX = x; if (x > hiX) hiX = x;
+    if (y < loY) loY = y; if (y > hiY) hiY = y;
+    if (z < loZ) loZ = z; if (z > hiZ) hiZ = z;
+  }
+  gOrigin = [loX, loY, loZ];
+  const nx = Math.max(1, Math.floor((hiX - loX) / G_CELL) + 1);
+  const ny = Math.max(1, Math.floor((hiY - loY) / G_CELL) + 1);
+  const nz = Math.max(1, Math.floor((hiZ - loZ) / G_CELL) + 1);
+  gDim = [nx, ny, nz];
+
+  const cells = nx * ny * nz;
+  gCell = new Int32Array(cells + 1);
+  gItem = new Int32Array(SAMPLES);
+  // Counting sort: tally per cell, prefix-sum into starts, then place.
+  for (let i = 0; i < SAMPLES; i++) gCell[cellOf(3 * i) + 1]++;
+  for (let c = 0; c < cells; c++) gCell[c + 1] += gCell[c];
+  const cursor = gCell.slice(0, cells);
+  for (let i = 0; i < SAMPLES; i++) gItem[cursor[cellOf(3 * i)]++] = i;
+}
+
+/** Cell index of spine sample at offset k in the flat array. */
+function cellOf(k) {
+  const [nx, ny, nz] = gDim;
+  const a = Math.min(nx - 1, Math.floor((spine[k] - gOrigin[0]) / G_CELL));
+  const b = Math.min(ny - 1, Math.floor((spine[k + 1] - gOrigin[1]) / G_CELL));
+  const c = Math.min(nz - 1, Math.floor((spine[k + 2] - gOrigin[2]) / G_CELL));
+  return (a * ny + b) * nz + c;
 }
 buildSpine();
 
@@ -682,40 +740,64 @@ buildSpine();
  * counts as inside when it is close enough to ANY part of the curve. Near the
  * origin that union is the open X-shaped junction.
  *
- * Brute force over ~300 samples for 30 marbles costs ~0.2 ms/frame, so there
- * is no need for a spatial index here. */
+ * This is the innermost loop in the simulation — once per marble per solve
+ * pass, four passes per sub-step — so it is where the marble count is won or
+ * lost. It used to scan all 300 to 490 samples. Now it visits the 27 grid cells
+ * around the query and scans only what they hold, which on the lemniscate is
+ * about 40 samples away from the junction and about 70 within it, and falls
+ * back to the full scan when the grid cannot prove its answer (see G_CELL).
+ * The result is identical either way: this is an index, not an approximation.
+ *
+ * The scan it replaces had a known inefficiency worth recording, because it is
+ * the kind of thing that comes back. Making the spine switchable turned SAMPLES
+ * from a const into a binding, and with a variable trip count V8 could no
+ * longer unroll the loop: 0.727 us/call became 1.113, and the step went 0.103
+ * ms to 0.153. Hoisting the bindings into locals made no difference, nor did
+ * preallocating one buffer for the largest curve, nor replacing the wrap
+ * arithmetic. The grid makes the question moot — the trip count is data
+ * dependent now whatever we do — but the loop below is still the fallback, so
+ * the note stays. */
 const near = { d: 0, qx: 0, qy: 0, qz: 0 };
 function nearestOnSpine(px, py, pz) {
-  // Hoisted into locals, and the loop below is the price of a switchable spine.
-  //
-  // This is the innermost loop in the simulation: 300 to 490 samples, three
-  // array reads each, per marble per sub-step. When SAMPLES was a const the
-  // engine knew the trip count at compile time and could unroll against it. As
-  // a binding a curve change reassigns, it cannot. Measured, same inputs, same
-  // 300 samples, 300k calls:
-  //
-  //   const SAMPLES (before switchable curves)   0.727 us/call, step 0.103 ms
-  //   let SAMPLES                                1.113 us/call, step 0.153 ms
-  //   let SAMPLES, trip count frozen back        0.811 us/call, step 0.111 ms
-  //
-  // So the variable trip count is most of it and hoisting these into locals is
-  // not what fixes it — that was tried, and measured no different. Nor was it
-  // the array being reassignable (preallocating one buffer for the largest
-  // curve: no change) or the wrap arithmetic (replacing % with a comparison:
-  // slightly worse). Getting the constant back would mean a specialised copy of
-  // this loop per curve, generated at run time, which is not a trade worth
-  // making for a single-file page.
-  //
-  // In proportion: step goes from 0.103 ms to 0.153 ms, which at 60fps is 0.6%
-  // of the frame budget against 0.9%. Worth knowing, not worth contorting for.
   const sp = spine, n = SAMPLES;
-  let best = 0, bestD2 = Infinity;
-  for (let i = 0; i < n; i++) {
-    const k = 3 * i;
-    const dx = px - sp[k], dy = py - sp[k + 1], dz = pz - sp[k + 2];
-    const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < bestD2) { bestD2 = d2; best = i; }
+  let best = -1, bestD2 = Infinity;
+
+  const [nx, ny, nz] = gDim;
+  const ca = Math.floor((px - gOrigin[0]) / G_CELL);
+  const cb = Math.floor((py - gOrigin[1]) / G_CELL);
+  const cc = Math.floor((pz - gOrigin[2]) / G_CELL);
+  const a0 = ca < 1 ? 0 : ca - 1, a1 = ca + 1 >= nx ? nx - 1 : ca + 1;
+  const b0 = cb < 1 ? 0 : cb - 1, b1 = cb + 1 >= ny ? ny - 1 : cb + 1;
+  const c0 = cc < 1 ? 0 : cc - 1, c1 = cc + 1 >= nz ? nz - 1 : cc + 1;
+  for (let a = a0; a <= a1; a++) {
+    for (let b = b0; b <= b1; b++) {
+      const row = (a * ny + b) * nz;
+      for (let c = c0; c <= c1; c++) {
+        const cell = row + c;
+        for (let t = gCell[cell], end = gCell[cell + 1]; t < end; t++) {
+          const i = gItem[t], k = 3 * i;
+          const dx = px - sp[k], dy = py - sp[k + 1], dz = pz - sp[k + 2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 < bestD2) { bestD2 = d2; best = i; }
+        }
+      }
+    }
   }
+
+  // A sample outside the neighbourhood is at least G_CELL away, so a winner
+  // closer than that is the global winner. Otherwise — a query well outside the
+  // solid, which the physics never asks for but an external caller might — scan
+  // the lot.
+  if (best < 0 || bestD2 > G_CELL * G_CELL) {
+    best = 0; bestD2 = Infinity;
+    for (let i = 0; i < n; i++) {
+      const k = 3 * i;
+      const dx = px - sp[k], dy = py - sp[k + 1], dz = pz - sp[k + 2];
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < bestD2) { bestD2 = d2; best = i; }
+    }
+  }
+
   // Refine by projecting onto the two chords touching the winning sample:
   // turns the sampling error from O(step) into O(step²·curvature).
   let refD2 = Infinity;
@@ -1159,9 +1241,20 @@ function applyGlassMode() {
  * Every marble's recent path, in a single LineSegments. One geometry rather
  * than one per marble keeps this at one draw call instead of thirty, which
  * matters because draw calls are the metric this scene is worst at.
+ *
+ * Only the first TRAIL_MARBLES of them get a trail. The line buffer is rebuilt
+ * on the CPU every frame — 47 segments per marble, two vertices each, position
+ * and colour — and one draw call does not make that free. Timed in isolation at
+ * 998 marbles: 1.256 ms per frame for all of them against 0.076 ms bounded to
+ * 40. That is 7.5% of a 60fps budget spent on something nobody can see, because
+ * past a few dozen the lines overlap into one bright tangle and the fortieth
+ * trail adds cost and no information. Above the bound the trail is a sample of
+ * the motion rather than a record of all of it, which is what it always was.
  * ------------------------------------------------------------------ */
 const TRAIL = CONF.trailLength;
+const TRAIL_MARBLES = 40;
 let trailMesh = null, trailPos = null, trailCol = null, trailHead = 0, trailFilled = 0;
+let trailCount = 0;
 
 function buildTrails(n) {
   if (trailMesh) {
@@ -1170,7 +1263,8 @@ function buildTrails(n) {
     trailMesh.material.dispose();
     trailMesh = null;
   }
-  const segs = n * (TRAIL - 1);
+  trailCount = Math.min(n, TRAIL_MARBLES);
+  const segs = trailCount * (TRAIL - 1);
   trailPos = new Float32Array(segs * 2 * 3);
   trailCol = new Float32Array(segs * 2 * 3);
   const g = new THREE.BufferGeometry();
@@ -1188,7 +1282,9 @@ function buildTrails(n) {
 
 /** Push the current positions into each marble's ring buffer. */
 function recordTrails() {
-  for (const m of marbles) {
+  const n = Math.min(marbles.length, trailCount);
+  for (let i = 0; i < n; i++) {
+    const m = marbles[i];
     const h = trailHead * 3;
     m.history[h] = m.pos.x; m.history[h + 1] = m.pos.y; m.history[h + 2] = m.pos.z;
   }
@@ -1199,7 +1295,9 @@ function recordTrails() {
 /** Rebuild the line buffer from the ring buffers, oldest segment faintest. */
 function updateTrails() {
   let o = 0;
-  for (const m of marbles) {
+  const n = Math.min(marbles.length, trailCount);
+  for (let i = 0; i < n; i++) {
+    const m = marbles[i];
     const c = m.color;
     for (let k = 0; k < TRAIL - 1; k++) {
       // walk backwards from the newest sample
@@ -1240,7 +1338,7 @@ function updateTrails() {
  * as an instanced vec4 and patched into the standard physical shader below, so
  * the result is the picture that was already there rather than forty
  * identically polished balls. The SSIM gate is what keeps that claim honest. */
-const MAX_MARBLES = 40;              // must be >= the count slider's maximum
+const MAX_MARBLES = 1000;            // must be >= the count slider's maximum
 const marbleGeo = new THREE.SphereGeometry(1, 32, 24);
 
 // metalness, roughness, clearcoat, clearcoatRoughness — one vec4 per instance.
@@ -1328,12 +1426,213 @@ const PALETTE = [
 const swatchOf = (i) => PALETTE[(Math.imul(i, 2654435761) >>> 8) % PALETTE.length];
 const wrap01 = (u) => u - Math.floor(u);
 
+/* Where the marbles start.
+ *
+ * The original scheme put each one on the spine at u = i/n, evenly spaced along
+ * the arc. That is the nicest possible start when it fits — a neat necklace that
+ * comes apart into chaos within a second — but it is single file down the
+ * centreline, so it needs 2 * rMax of arc per marble and caps out at
+ * LENGTH / (2 * rMax): 45 on the lemniscate, 67 and 74 on the rosettes. That
+ * cap, not the physics and not the rendering, is what stopped the count slider
+ * at 40.
+ *
+ * The bore is 2.4 wide against marbles of at most 1.15, so a cross-section
+ * holds two of the largest or a handful of the smallest side by side. Above the
+ * single-file cap the marbles are placed in the bore instead, by rejection
+ * sampling: pick an arc position and a transverse offset, keep it if it is
+ * inside the wall and clear of everything already placed. Uniform in the disc
+ * (hence the sqrt) so the wall is not over-favoured, and the containment test
+ * is against the whole spine, because near a crossing the nearest branch may be
+ * a different one.
+ *
+ * Both schemes are driven by the same seeded stream, so a seed still reproduces
+ * a scene exactly. The switch is on the count alone, which keeps the default
+ * 30-marble scene — the one the reference screenshots and the hero image are of
+ * — bit-for-bit what it was.
+ *
+ * The clash test goes through a grid of its own rather than walking everything
+ * placed so far. Without it the build is O(attempts * placed) and asking for
+ * 1000 marbles froze the page for 2.5 seconds — on a slider drag, which is the
+ * worst possible moment. A Map keyed by cell is fine here where it would not be
+ * in the solver: this runs once per rebuild, not once per frame.
+ *
+ * Rejection sampling is still not guaranteed to succeed: past about
+ * 285 marbles at the default size it starts failing to find room, and
+ * buildMarbles reports how many it actually placed rather than pretending.
+ *
+ * Two bounds keep a hopeless request from freezing the page. A single marble
+ * gives up after SEED_ATTEMPTS tries; the build as a whole gives up once
+ * SEED_GIVE_UP marbles in a row have failed, on the grounds that when even the
+ * small ones cannot find room the tube is full and the remaining hundreds will
+ * each burn a full budget of attempts proving it. Asking for 1000 at the
+ * default size therefore costs a bounded moment and grants what fits. */
+function seedOnSpine(u, centre, tangent, side, up) {
+  curve.getPointAt(u, centre);
+  curve.getTangentAt(u, tangent);
+  side.set(-tangent.y, tangent.x, 0).normalize();
+  up.set(0, 0, 1);
+}
+
+/** True when marbles still fit end to end along the arc, one per station. */
+function singleFileFits(n) {
+  return n * 2 * Math.min(CONF.rMax * state.sizeScale, R * 0.55) <= LENGTH;
+}
+
+/* How hard to try before giving up on one marble, and how many failures in a
+ * row mean the tube is full.
+ *
+ * SEED_ATTEMPTS is small on purpose, and the number was measured rather than
+ * picked. Asking for 1000 marbles at the default size, varying the budget:
+ *
+ *    attempts   granted   build
+ *         250       248    66 ms
+ *         500       269   123 ms
+ *        1000       245   142 ms
+ *        2000       234   225 ms
+ *        4000       264   562 ms
+ *
+ * The count is stochastic in the 230-290 band whatever the budget — near
+ * saturation whether a marble finds room is luck, not persistence — while the
+ * cost tracks the budget almost linearly. So a big budget buys nothing but
+ * latency, and this runs on a slider drag where latency is the whole
+ * experience. */
+const SEED_ATTEMPTS = 400;
+const SEED_GIVE_UP = 12;
+let seedMisses = 0;
+
+/* The grid the clash test goes through.
+ *
+ * Linked lists in flat arrays, not buckets in a Map: head[cell] is the first
+ * marble filed in that cell or -1, and next[k] is the one after k. Inserting is
+ * two writes, walking a cell is array indexing, and a rebuild allocates nothing
+ * beyond the two arrays themselves. That matters because this is the innermost
+ * loop of the build — 27 cells per attempt, hundreds of thousands of attempts
+ * for a request the tube cannot grant — and 27 Map.get calls per attempt cost
+ * about as much as walking every marble placed so far, which is what the Map
+ * version was supposed to improve on.
+ *
+ * Cell size is the largest possible sum of two radii, so a marble more than one
+ * cell away in any axis cannot be overlapping. */
+let seedCellSize = 1, seedDim = [0, 0, 0], seedLo = [0, 0, 0];
+let seedHead = new Int32Array(0), seedNext = new Int32Array(0);
+const seedPos = [];                    // x, y, z, r per placed marble, flat
+
+function seedReset() {
+  seedPos.length = 0;
+  seedMisses = 0;
+  seedCellSize = Math.max(1e-3, 2 * Math.min(CONF.rMax * state.sizeScale, R * 0.55));
+  // The marbles all start inside the solid, so the spine's extent plus R bounds
+  // them. One cell of slack on each side keeps the neighbourhood walk in range.
+  seedLo = [-BOUND_R - seedCellSize, -BOUND_R - seedCellSize, -BOUND_R - seedCellSize];
+  const n = Math.ceil((2 * BOUND_R + 4 * seedCellSize) / seedCellSize);
+  seedDim = [n, n, n];
+  const cells = n * n * n;
+  if (seedHead.length < cells) seedHead = new Int32Array(cells);
+  seedHead.fill(-1, 0, cells);
+  if (seedNext.length < MAX_MARBLES) seedNext = new Int32Array(MAX_MARBLES);
+}
+
+function seedCellIndex(x, y, z) {
+  const nx = seedDim[0], ny = seedDim[1], nz = seedDim[2];
+  let a = Math.floor((x - seedLo[0]) / seedCellSize);
+  let b = Math.floor((y - seedLo[1]) / seedCellSize);
+  let c = Math.floor((z - seedLo[2]) / seedCellSize);
+  a = a < 0 ? 0 : a >= nx ? nx - 1 : a;
+  b = b < 0 ? 0 : b >= ny ? ny - 1 : b;
+  c = c < 0 ? 0 : c >= nz ? nz - 1 : c;
+  return (a * ny + b) * nz + c;
+}
+
+function seedAdd(x, y, z, r) {
+  const k = seedPos.length / 4;
+  seedPos.push(x, y, z, r);
+  const cell = seedCellIndex(x, y, z);
+  seedNext[k] = seedHead[cell];
+  seedHead[cell] = k;
+}
+
+/** True when a sphere at (x, y, z) of radius r would overlap something placed. */
+function seedClashes(x, y, z, r) {
+  const nx = seedDim[0], ny = seedDim[1], nz = seedDim[2];
+  let ca = Math.floor((x - seedLo[0]) / seedCellSize);
+  let cb = Math.floor((y - seedLo[1]) / seedCellSize);
+  let cc = Math.floor((z - seedLo[2]) / seedCellSize);
+  ca = ca < 1 ? 1 : ca >= nx - 1 ? nx - 2 : ca;
+  cb = cb < 1 ? 1 : cb >= ny - 1 ? ny - 2 : cb;
+  cc = cc < 1 ? 1 : cc >= nz - 1 ? nz - 2 : cc;
+  for (let a = ca - 1; a <= ca + 1; a++) {
+    for (let b = cb - 1; b <= cb + 1; b++) {
+      const row = (a * ny + b) * nz;
+      for (let c = cc - 1; c <= cc + 1; c++) {
+        for (let k = seedHead[row + c]; k >= 0; k = seedNext[k]) {
+          const o = k * 4;
+          const dx = x - seedPos[o], dy = y - seedPos[o + 1], dz = z - seedPos[o + 2];
+          const reach = r + seedPos[o + 3];
+          if (dx * dx + dy * dy + dz * dz < reach * reach) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/** Rejection-sample a position inside the bore that clears everything placed so
+ *  far. Returns false when it runs out of attempts.
+ *
+ *  The station comes from the sampled spine rather than from curve.getPointAt.
+ *  That is the difference between a slider drag and a freeze: getPointAt binary
+ *  searches a 4000-entry arc-length table, getTangentAt does it twice more for
+ *  the finite difference, and this runs once per attempt — hundreds of thousands
+ *  of times for a request the tube cannot grant. The samples are the same curve
+ *  at 0.35 spacing, which is far finer than a starting position needs, and the
+ *  tangent from neighbouring samples is the same finite difference by another
+ *  route. Measured on a 1000-marble request: 2740 ms down to 128 ms. */
+function seedInBore(r, centre, tangent, side, up) {
+  const sp = spine, ns = SAMPLES;
+  for (let t = 0; t < SEED_ATTEMPTS; t++) {
+    const i = Math.min(ns - 1, (rng() * ns) | 0);
+    const k = 3 * i;
+    const kNext = 3 * ((i + 1) % ns), kPrev = 3 * ((i - 1 + ns) % ns);
+    centre.set(sp[k], sp[k + 1], sp[k + 2]);
+    tangent.set(sp[kNext] - sp[kPrev], sp[kNext + 1] - sp[kPrev + 1],
+                sp[kNext + 2] - sp[kPrev + 2]).normalize();
+    side.set(-tangent.y, tangent.x, 0).normalize();
+    up.set(0, 0, 1);
+
+    const rho = (R - r) * Math.sqrt(rng());
+    const th = rng() * Math.PI * 2;
+    const c = Math.cos(th), sn = Math.sin(th);
+    const x = centre.x + side.x * rho * c + up.x * rho * sn;
+    const y = centre.y + side.y * rho * c + up.y * rho * sn;
+    const z = centre.z + side.z * rho * c + up.z * rho * sn;
+    if (nearestOnSpine(x, y, z).d > R - r) continue;
+    if (seedClashes(x, y, z, r)) continue;
+
+    centre.set(x, y, z);
+    seedAdd(x, y, z, r);
+    return true;
+  }
+  return false;
+}
+
+/** Place one marble, by whichever scheme the count calls for. False means the
+ *  caller should skip it; seedMisses reaching SEED_GIVE_UP means stop asking. */
+let seedPacking = false;
+function seedPlace(u, r, centre, tangent, side, up) {
+  if (!seedPacking) { seedOnSpine(u, centre, tangent, side, up); return true; }
+  if (seedInBore(r, centre, tangent, side, up)) { seedMisses = 0; return true; }
+  seedMisses++;
+  return false;
+}
+
 function buildMarbles() {
   marbles.length = 0;
   hits = 0; wallHits = 0;
   reseed(state.seed);
 
   const n = state.marbles;
+  seedPacking = !singleFileFits(n);
+  seedReset();
   const centre = new THREE.Vector3();
   const tangent = new THREE.Vector3();
   const side = new THREE.Vector3();
@@ -1359,19 +1658,30 @@ function buildMarbles() {
     const clearcoat = rand(0.4, 1.0);
     const clearcoatRoughness = rand(0.02, 0.2);
 
-    marbleMesh.setColorAt(i, color);
-    const f = i * 4;
+    // Where it starts. Two schemes, and which one runs depends on whether the
+    // simple one still fits — see seedOnSpine and seedInBore.
+    //
+    // A marble that finds no room is skipped rather than stacked inside another
+    // one, and rather than ending the build: it is usually a large one, and the
+    // smaller ones still to come will often fit where it could not. Skipping
+    // instead of stopping is worth about 130 marbles against 285 at the default
+    // size. The count is a request; the readout shows what was granted.
+    if (!seedPlace(u, r, centre, tangent, side, up)) {
+      if (seedMisses >= SEED_GIVE_UP) break;         // the tube is full
+      continue;
+    }
+
+    // Everything below writes to the marble's slot in the instance buffers,
+    // which is where it lands in `marbles` — not i, because a skip makes the
+    // two diverge. With nothing skipped they are the same number, which is what
+    // keeps the default scene bit-for-bit unchanged.
+    const slot = marbles.length;
+    marbleMesh.setColorAt(slot, color);
+    const f = slot * 4;
     finish.array[f] = metalness;
     finish.array[f + 1] = roughness;
     finish.array[f + 2] = clearcoat;
     finish.array[f + 3] = clearcoatRoughness;
-
-    // Start on the spine, evenly spaced: the arc gap (L/n ≈ 3.5) is wider than
-    // the largest pair of radii, so nothing starts overlapping.
-    curve.getPointAt(u, centre);
-    curve.getTangentAt(u, tangent);
-    side.set(-tangent.y, tangent.x, 0).normalize();
-    up.set(0, 0, 1);
 
     // Mostly along the tube, with a transverse kick so they also work the wall.
     const speed = rand(CONF.speedMin, CONF.speedMax) * (rng() < 0.5 ? -1 : 1);
@@ -1381,13 +1691,16 @@ function buildMarbles() {
 
     marbles.push({
       r, m: r * r * r, pos: centre.clone(), vel, color,
-      history: new Float32Array(TRAIL * 3),
+      // Only the marbles that get a trail need somewhere to keep one. At a
+      // thousand marbles the rest would be half a megabyte of ring buffers
+      // nothing ever reads.
+      history: slot < TRAIL_MARBLES ? new Float32Array(TRAIL * 3) : null,
     });
 
     // Uniform scale plus translation, written straight into the instance
     // buffer. The off-diagonal entries are zero from allocation and stay zero,
     // so there is nothing to build a Matrix4 for.
-    const o = i * 16;
+    const o = slot * 16;
     const mat = marbleMesh.instanceMatrix.array;
     mat[o] = r; mat[o + 1] = 0; mat[o + 2] = 0; mat[o + 3] = 0;
     mat[o + 4] = 0; mat[o + 5] = r; mat[o + 6] = 0; mat[o + 7] = 0;
@@ -1395,7 +1708,13 @@ function buildMarbles() {
     mat[o + 12] = centre.x; mat[o + 13] = centre.y; mat[o + 14] = centre.z; mat[o + 15] = 1;
   }
 
-  marbleMesh.count = n;
+  // What was asked for is not always what fits. Snap the request down to the
+  // grant so the readout, the slider and the shared link all say the same
+  // thing, and so dragging further up visibly stops instead of silently
+  // doing nothing.
+  state.marbles = marbles.length;
+
+  marbleMesh.count = marbles.length;
   marbleMesh.instanceMatrix.needsUpdate = true;
   marbleMesh.instanceColor.needsUpdate = true;
   finish.needsUpdate = true;
@@ -1493,33 +1812,147 @@ function updateHalo() {
  * Marble against marble: 3D elastic impulse along the line of centres.
  *   j = -(1 + e)·(v_rel · n) / (1/m₁ + 1/m₂)
  * ------------------------------------------------------------------ */
+/* Marble against marble.
+ *
+ * Two ways round the pairs, chosen by count, because neither wins everywhere.
+ *
+ * Below PAIR_GRID_MIN, every pair is tested. At 30 marbles that is 435 tests
+ * and it is hard to beat: any index has to be built before it can be asked
+ * anything, and the build alone costs more than 435 distance comparisons.
+ * Measured, at 30 marbles: 0.0643 ms/step all-pairs against 0.0892 with the
+ * grid, so the clever version was 39% slower.
+ *
+ * Above it, the grid wins by more and more, because all-pairs is O(n^2) and the
+ * grid is O(n). The threshold below is where the two cross on this machine.
+ *
+ * The grid is the same compressed-row layout as the spine's, but rebuilt on
+ * every solve pass rather than once per curve, because the marbles move. Both
+ * arrays are sized on demand and reused, so a rebuild allocates nothing, which
+ * the ALLOC_PER_STEP gate checks. Cell size is the largest gap at which two
+ * marbles can still touch — 2 * rMax * sizeScale — which is what makes the 27
+ * neighbouring cells sufficient: a marble more than one cell away in any axis
+ * is further off than that, so it cannot be in contact.
+ *
+ * One honest caveat. Positions are binned at the start of the pass and the pass
+ * then moves them as it separates overlaps, so a marble can end up outside the
+ * cell it was filed under and a genuine overlap can go untested until the next
+ * pass. That is not new: the all-pairs loop resolves in index order and can
+ * equally re-overlap a pair it has already been past, which is why step() runs
+ * the solve twice per sub-step. Containment does not depend on this either way
+ * — solveWall enforces it separately, and ESCAPED stays 0.
+ */
+const PAIR_GRID_MIN = 64;
+
+let mDim = [0, 0, 0], mOrigin = [0, 0, 0], mCellSize = 1;
+let mCell = new Int32Array(0), mItem = new Int32Array(0), mCursor = new Int32Array(0);
+
+/** Resolve one pair: elastic impulse when closing, then separate along the
+ *  contact normal by mass. Both call sites share this, so the two ways round
+ *  the pairs cannot drift apart. */
+function collide(A, B, e) {
+  const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y, dz = B.pos.z - A.pos.z;
+  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  const minDist = A.r + B.r;
+  if (dist >= minDist || dist < 1e-9) return;
+
+  const nx = dx / dist, ny = dy / dist, nz = dz / dist;
+  const vn = (B.vel.x - A.vel.x) * nx + (B.vel.y - A.vel.y) * ny + (B.vel.z - A.vel.z) * nz;
+
+  if (vn < 0) {                                   // only when closing in
+    const imp = -(1 + e) * vn / (1 / A.m + 1 / B.m);
+    A.vel.x -= nx * imp / A.m; A.vel.y -= ny * imp / A.m; A.vel.z -= nz * imp / A.m;
+    B.vel.x += nx * imp / B.m; B.vel.y += ny * imp / B.m; B.vel.z += nz * imp / B.m;
+    hits++;
+  }
+
+  const overlap = minDist - dist;
+  const wA = B.m / (A.m + B.m), wB = A.m / (A.m + B.m);
+  A.pos.x -= nx * overlap * wA; A.pos.y -= ny * overlap * wA; A.pos.z -= nz * overlap * wA;
+  B.pos.x += nx * overlap * wB; B.pos.y += ny * overlap * wB; B.pos.z += nz * overlap * wB;
+}
+
+function buildMarbleGrid() {
+  const n = marbles.length;
+  mCellSize = Math.max(1e-3, 2 * Math.min(CONF.rMax * state.sizeScale, R * 0.55));
+  let loX = Infinity, loY = Infinity, loZ = Infinity;
+  let hiX = -Infinity, hiY = -Infinity, hiZ = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = marbles[i].pos;
+    if (p.x < loX) loX = p.x; if (p.x > hiX) hiX = p.x;
+    if (p.y < loY) loY = p.y; if (p.y > hiY) hiY = p.y;
+    if (p.z < loZ) loZ = p.z; if (p.z > hiZ) hiZ = p.z;
+  }
+  mOrigin[0] = loX; mOrigin[1] = loY; mOrigin[2] = loZ;
+  const nx = Math.max(1, Math.floor((hiX - loX) / mCellSize) + 1);
+  const ny = Math.max(1, Math.floor((hiY - loY) / mCellSize) + 1);
+  const nz = Math.max(1, Math.floor((hiZ - loZ) / mCellSize) + 1);
+  mDim[0] = nx; mDim[1] = ny; mDim[2] = nz;
+
+  const cells = nx * ny * nz;
+  if (mCell.length < cells + 1) mCell = new Int32Array(cells + 1);
+  else mCell.fill(0, 0, cells + 1);
+  if (mItem.length < n) mItem = new Int32Array(n);
+  if (mCursor.length < cells) mCursor = new Int32Array(cells);
+
+  for (let i = 0; i < n; i++) mCell[marbleCell(marbles[i].pos) + 1]++;
+  for (let c = 0; c < cells; c++) mCell[c + 1] += mCell[c];
+  for (let c = 0; c < cells; c++) mCursor[c] = mCell[c];
+  for (let i = 0; i < n; i++) mItem[mCursor[marbleCell(marbles[i].pos)]++] = i;
+}
+
+function marbleCell(p) {
+  const nx = mDim[0], ny = mDim[1], nz = mDim[2];
+  let a = Math.floor((p.x - mOrigin[0]) / mCellSize);
+  let b = Math.floor((p.y - mOrigin[1]) / mCellSize);
+  let c = Math.floor((p.z - mOrigin[2]) / mCellSize);
+  a = a < 0 ? 0 : a >= nx ? nx - 1 : a;
+  b = b < 0 ? 0 : b >= ny ? ny - 1 : b;
+  c = c < 0 ? 0 : c >= nz ? nz - 1 : c;
+  return (a * ny + b) * nz + c;
+}
+
 function solveMarbles() {
   const e = state.restitution;
-  for (let i = 0; i < marbles.length; i++) {
+  const n = marbles.length;
+  if (n < 2) return;
+
+  if (n < PAIR_GRID_MIN) {
+    for (let i = 0; i < n; i++) {
+      const A = marbles[i];
+      for (let j = i + 1; j < n; j++) collide(A, marbles[j], e);
+    }
+    return;
+  }
+
+  buildMarbleGrid();
+  const nx = mDim[0], ny = mDim[1], nz = mDim[2];
+  for (let i = 0; i < n; i++) {
     const A = marbles[i];
-    for (let j = i + 1; j < marbles.length; j++) {
-      const B = marbles[j];
-      const dx = B.pos.x - A.pos.x, dy = B.pos.y - A.pos.y, dz = B.pos.z - A.pos.z;
-      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      const minDist = A.r + B.r;
-      if (dist >= minDist || dist < 1e-9) continue;
-
-      const nx = dx / dist, ny = dy / dist, nz = dz / dist;
-      const vn = (B.vel.x - A.vel.x) * nx + (B.vel.y - A.vel.y) * ny + (B.vel.z - A.vel.z) * nz;
-
-      if (vn < 0) {                                   // only when closing in
-        const imp = -(1 + e) * vn / (1 / A.m + 1 / B.m);
-        A.vel.x -= nx * imp / A.m; A.vel.y -= ny * imp / A.m; A.vel.z -= nz * imp / A.m;
-        B.vel.x += nx * imp / B.m; B.vel.y += ny * imp / B.m; B.vel.z += nz * imp / B.m;
-        hits++;
+    const ca = marbleCellAxis(A.pos.x, 0, nx);
+    const cb = marbleCellAxis(A.pos.y, 1, ny);
+    const cc = marbleCellAxis(A.pos.z, 2, nz);
+    const a0 = ca < 1 ? 0 : ca - 1, a1 = ca + 1 >= nx ? nx - 1 : ca + 1;
+    const b0 = cb < 1 ? 0 : cb - 1, b1 = cb + 1 >= ny ? ny - 1 : cb + 1;
+    const c0 = cc < 1 ? 0 : cc - 1, c1 = cc + 1 >= nz ? nz - 1 : cc + 1;
+    for (let a = a0; a <= a1; a++) {
+      for (let b = b0; b <= b1; b++) {
+        const row = (a * ny + b) * nz;
+        for (let c = c0; c <= c1; c++) {
+          const cell = row + c;
+          for (let t = mCell[cell], end = mCell[cell + 1]; t < end; t++) {
+            const j = mItem[t];
+            if (j > i) collide(A, marbles[j], e);     // each pair once, as before
+          }
+        }
       }
-
-      const overlap = minDist - dist;
-      const wA = B.m / (A.m + B.m), wB = A.m / (A.m + B.m);
-      A.pos.x -= nx * overlap * wA; A.pos.y -= ny * overlap * wA; A.pos.z -= nz * overlap * wA;
-      B.pos.x += nx * overlap * wB; B.pos.y += ny * overlap * wB; B.pos.z += nz * overlap * wB;
     }
   }
+}
+
+/** One axis of a marble's cell index, clamped into the grid. */
+function marbleCellAxis(v, axis, dim) {
+  const k = Math.floor((v - mOrigin[axis]) / mCellSize);
+  return k < 0 ? 0 : k >= dim ? dim - 1 : k;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1692,7 +2125,7 @@ const NUMBER_WORD = { 1: 'One', 2: 'Two', 3: 'Three', 4: 'Four' };
  *  a preset, a shared link and a click all end up in the same place. */
 function syncUI({ rebuild = false } = {}) {
   sliders.speed.value = state.timeScale;
-  sliders.count.value = state.marbles;
+  sliders.count.value = sliderFromCount(state.marbles);
   sliders.size.value = state.sizeScale;
   sliders.elastic.value = state.restitution;
   outs.speed.textContent = state.timeScale.toFixed(2) + '×';
@@ -1737,7 +2170,12 @@ function syncUI({ rebuild = false } = {}) {
   applyGlassMode();
   if (trailMesh) trailMesh.visible = state.trails;
 
-  if (rebuild) restart();
+  if (rebuild) {
+    restart();
+    // buildMarbles may have granted fewer marbles than the slider asked for.
+    sliders.count.value = sliderFromCount(state.marbles);
+    outs.count.textContent = String(state.marbles);
+  }
   writeHash();
 }
 
@@ -1867,10 +2305,21 @@ sliders.elastic.addEventListener('input', () => {
   syncUI();
 });
 // Count and size change how the marbles are laid out, so they rebuild. The
-// slider maxima are what the geometry allows: marbles are placed evenly along
-// the spine, so the count cannot exceed length / (2 * largest radius).
+// The marble slider carries a position, not a count.
+//
+// The range is 2 to 1000 now, and a linear slider over that puts the default of
+// 30 at 3% of the travel: every setting anyone reaches for would be crammed
+// into the first thirtieth, and the rest of the track would be counts nobody
+// wants. Geometric spacing gives every doubling the same width, so 30 sits at
+// 44% and the interesting range is the middle of the track.
+const COUNT_MIN = 2, COUNT_MAX = 1000;
+const countFromSlider = (t) =>
+  Math.round(COUNT_MIN * Math.pow(COUNT_MAX / COUNT_MIN, t / 1000));
+const sliderFromCount = (n) =>
+  Math.round(1000 * Math.log(n / COUNT_MIN) / Math.log(COUNT_MAX / COUNT_MIN));
+
 sliders.count.addEventListener('input', () => {
-  state.marbles = Number(sliders.count.value);
+  state.marbles = countFromSlider(Number(sliders.count.value));
   syncUI({ rebuild: true });
 });
 sliders.size.addEventListener('input', () => {
@@ -1882,6 +2331,11 @@ const PRESETS = {
   default:      { marbles: CONF.marbles, sizeScale: 1, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1, glassMode: 0, spin: true, ride: false },
   heavy:        { marbles: 24, sizeScale: 0.75, restitution: 1, gravity: 0, trails: false, heavyOne: true, timeScale: 1 },
   swarm:        { marbles: 40, sizeScale: 0.6, restitution: 1, gravity: 0, trails: true, heavyOne: false, timeScale: 1 },
+  // Enough to read as a tube packed with marbles rather than a few loose ones.
+  // 200 at full size is about 70% of what will fit; asking for the ceiling
+  // itself would just make the build spend its attempts failing.
+  packed:       { marbles: 200, sizeScale: 1, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1 },
+  shoal:        { marbles: 600, sizeScale: 0.55, restitution: 1, gravity: 0, trails: false, heavyOne: false, timeScale: 1 },
   'marble-run': { marbles: 18, sizeScale: 1.1, restitution: 0.92, gravity: CONF.gravityOn, trails: false, heavyOne: false, timeScale: 1 },
 };
 for (const b of document.querySelectorAll('[data-preset]')) {
