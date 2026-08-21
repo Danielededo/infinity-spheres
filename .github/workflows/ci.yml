@@ -44,7 +44,8 @@ jobs:
       # Only the physics phase runs here. These gates are hardware independent:
       # no marble may ever end a step outside the glass, kinetic energy must not
       # drift with restitution at 1, and marbles must still cross between lobes
-      # (a floor, not an equality — see README.md for why that count moves).
+      # (a floor of 150 against a figure that is now reproducibly 154 — see
+      # README.md for what made it reproducible).
       # The render metrics are deliberately not gated in CI: frame time carries
       # 27% run-to-run variance on a CPU rasteriser (see bench/README.md), and
       # the reference screenshots are rendered on the maintainer's machine, not
