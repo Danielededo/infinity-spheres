@@ -44,7 +44,16 @@ Every hook is injected by the harness:
 | `ALLOC_FRAME` | median `Vector3` constructions per frame |
 | `ALLOC_PER_STEP` | `Vector3` constructions per physics step |
 | `ESCAPED`, `ENERGY_DRIFT_PCT`, `LOBE_CHANGES` | physics gates over 90 simulated seconds |
-| `SSIM` | per-pose SSIM against `bench/ref/*.png` |
+| `SSIM` | per-pose SSIM against `bench/ref/*.png`, worst of four planes |
+
+`SSIM` is the **minimum** of four separate comparisons — luminance, R, G and B —
+not a single grayscale one. Luminance alone was measured to be blind to the
+change it most needed to catch: shifting one palette hue by 0.08 at constant
+saturation and lightness, a plainly different colour, scored 0.99999 and passed.
+Four planes bring the same shift to 0.99917, which still passes at the 0.98
+threshold, so the honest statement is that the gate catches geometry and shading
+reliably and colour only when it moves a lot. A metric weighted toward the
+marbles, or a reference image larger than 320x200, is what that needs.
 
 ## Reading FRAME_P95
 
