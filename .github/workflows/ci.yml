@@ -41,12 +41,13 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
       - run: npx playwright install --with-deps chromium
 
-      # Only the physics phase runs here. Those gates are exact and hardware
-      # independent: no marble may ever end a step outside the glass, kinetic
-      # energy must not drift with restitution at 1, and marbles must still
-      # cross between lobes. The render metrics are deliberately not gated in
-      # CI: frame time carries 27% run-to-run variance on a CPU rasteriser
-      # (see bench/README.md), and the SSIM references were rendered on a
-      # different machine, so both would be flaky rather than informative.
+      # Only the physics phase runs here. These gates are hardware independent:
+      # no marble may ever end a step outside the glass, kinetic energy must not
+      # drift with restitution at 1, and marbles must still cross between lobes
+      # (a floor, not an equality — see README.md for why that count moves).
+      # The render metrics are deliberately not gated in CI: frame time carries
+      # 27% run-to-run variance on a CPU rasteriser (see bench/README.md), and
+      # the reference screenshots are rendered on the maintainer's machine, not
+      # on the runner, so both would be flaky rather than informative.
       - name: Physics non-regression gates
         run: npm run bench:gates

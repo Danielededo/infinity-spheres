@@ -2,7 +2,7 @@
   "name": "infinity-spheres",
   "version": "1.0.0",
   "private": true,
-  "description": "A glass tube swept along a Bernoulli lemniscate, with 30 marbles bouncing inside it. One file, Three.js from a CDN.",
+  "description": "A glass tube swept along a self-crossing curve, with marbles bouncing elastically inside it and passing through the open junctions. One file, Three.js from a CDN.",
   "license": "MIT",
   "author": "Daniele De Dominicis",
   "homepage": "https://danielededo.github.io/infinity-spheres/",
@@ -10,12 +10,13 @@
     "type": "git",
     "url": "git+https://github.com/Danielededo/infinity-spheres.git"
   },
-  "keywords": ["three.js", "webgl", "lemniscate", "physics", "elastic-collisions"],
+  "keywords": ["three.js", "webgl", "lemniscate", "rose-curve", "self-intersecting", "physics", "elastic-collisions"],
   "scripts": {
     "check": "node bench/check.mjs",
     "bench": "node bench/bench.mjs",
     "bench:gates": "node bench/bench.mjs --phases 3",
     "bench:ref": "node bench/bench.mjs --write-ref",
+    "preview": "node bench/preview.mjs",
     "serve": "python3 -m http.server 8000"
   },
   "devDependencies": {
