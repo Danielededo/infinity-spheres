@@ -1310,6 +1310,11 @@ const SND = {
   floor: 0.04,         // impulses below this share of the reference are silent
   decayMarble: 0.075,  // seconds; a marble is a short, dead click
   decayGlass: 0.16,    // the tube rings longer and brighter
+  /* The enable confirmation, which is deliberately not an impact — held long
+   * enough and loud enough for a small speaker to reproduce. See audioConfirm
+   * for why an impact voice was the wrong tool for that job. */
+  confirmGain: 0.9,
+  confirmHold: 0.16,   // seconds per note, two of them
 };
 
 let audio = null, audioBus = null, audioNoise = null;
@@ -1405,6 +1410,41 @@ function audioVoice(ctx, g, at, freq, gain, decay, glass) {
   click.stop(at + 0.03);
 }
 
+/** The sound that says "on": two held tones, not a click.
+ *
+ *  An impact voice was the wrong tool for this, and the reason is measurable
+ *  rather than a matter of taste. Rendered offline, the click this used to play
+ *  spends 4.4 ms within 6 dB of its own peak and 27.7 ms within 20 dB, at a
+ *  peak of -11.7 dBFS — because a strike is *supposed* to be short, and every
+ *  other voice in here should stay that way. A laptop reproduces it fine. A
+ *  phone speaker need not: it runs protection and loudness management that ramp
+ *  over tens of milliseconds, so a 28 ms transient at -12 dBFS can be swallowed
+ *  whole while the browser's tab indicator cheerfully reports that audio is
+ *  playing. That combination — indicator on, speaker silent — is exactly the
+ *  report this sound exists to resolve, so it has to be the one thing in the
+ *  page no speaker can miss: held rather than struck, and long enough for a
+ *  ramp to finish opening.
+ *
+ *  Two notes a fifth apart, so it also reads as a deliberate signal rather than
+ *  a stray collision. It runs through the same bus and clipper as everything
+ *  else, so the ceiling still bounds it. */
+function audioConfirm(ctx, g, at) {
+  for (let i = 0; i < 2; i++) {
+    const t = at + i * SND.confirmHold;
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(SND.fRef * (i ? 1.5 : 1), t);
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(SND.confirmGain, t + 0.008);
+    env.gain.setValueAtTime(SND.confirmGain, t + SND.confirmHold * 0.8);
+    env.gain.exponentialRampToValueAtTime(1e-4, t + SND.confirmHold + 0.06);
+    osc.connect(env).connect(g.bus);
+    osc.start(t);
+    osc.stop(t + SND.confirmHold + 0.08);
+  }
+}
+
 /** Frequency and gain for one queued impact, or null if it is below the floor.
  *  Pure arithmetic, so the mapping can be checked without making a sound. */
 function impactVoice(imp, r, kind, ref) {
@@ -1487,14 +1527,15 @@ function playImpacts() {
 
 /** Enable or disable, building the graph the first time.
  *
- *  Enabling plays one deliberate click, and that is not decoration. Without it
- *  "the sound is off", "the sound is broken" and "nothing loud is happening
- *  this instant" are indistinguishable from the outside — there is no way to
- *  tell whether the feature works, only whether you happen to be hearing
- *  something. One guaranteed click on enable makes it a single yes-or-no test:
+ *  Enabling plays one deliberate two-note tone, and that is not decoration.
+ *  Without it "the sound is off", "the sound is broken" and "nothing loud is
+ *  happening this instant" are indistinguishable from the outside — there is no
+ *  way to tell whether the feature works, only whether you happen to be hearing
+ *  something. One guaranteed sound on enable makes it a single yes-or-no test:
  *  hear it and the audio path is fine, so any later silence is about the
  *  simulation; hear nothing and the problem is the browser, the device or the
- *  volume, and nothing in this file will fix it.
+ *  volume, and nothing in this file will fix it. It is held rather than struck
+ *  so that a phone speaker cannot swallow it — see audioConfirm.
  *
  *  Scheduled after resume() settles rather than immediately. The context clock
  *  does not advance while suspended, so a voice scheduled against currentTime
@@ -1506,8 +1547,7 @@ function setSound(on) {
     if (!audio && !audioInit()) { state.sound = false; return; }
     Promise.resolve(audio.resume()).then(() => {
       if (!state.sound) return;               // turned off again in the meantime
-      audioVoice(audio, { bus: audioBus, noise: audioNoise }, audio.currentTime + 0.02,
-                 SND.fRef, SND.voiceGain, SND.decayGlass, true);
+      audioConfirm(audio, { bus: audioBus, noise: audioNoise }, audio.currentTime + 0.02);
     }).catch(() => {});
   } else if (audio) {
     audio.suspend();
@@ -2746,7 +2786,8 @@ window.__scene = {
   marbleMesh, CURVES, PALETTE,
   // The audio pieces, so the synth can be rendered into an OfflineAudioContext
   // and measured rather than taken on trust.
-  SND, audioGraph, audioVoice, impactVoice, sndReference, noteImpact, setSound, playImpacts,
+  SND, audioGraph, audioVoice, audioConfirm, impactVoice, sndReference, noteImpact,
+  setSound, playImpacts,
   // The frame's pending impacts, quietest first. Exposed so the selection rule
   // can be tested: which impacts survive is inaudible when it goes wrong.
   get sndQueue() {

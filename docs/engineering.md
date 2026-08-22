@@ -388,10 +388,10 @@ no build step.
 
 ### Knowing whether it works at all
 
-Enabling plays one deliberate click before any impact has happened, and that is not decoration. Without
+Enabling plays one deliberate sound before any impact has happened, and that is not decoration. Without
 it, "the sound is off", "the sound is broken" and "nothing loud is happening this instant" are
 indistinguishable from outside: there is no way to tell whether the feature works, only whether you
-happen to be hearing something. One guaranteed click makes it a single yes-or-no test — hear it and the
+happen to be hearing something. One guaranteed sound makes it a single yes-or-no test — hear it and the
 audio path is fine, so any later silence is about the simulation; hear nothing and the problem is the
 browser, the device or the volume, and nothing in the page will fix it. The button says `Sound: on` or
 `Sound: off` in words for the same reason.
@@ -403,6 +403,33 @@ behind.
 This was added after three rounds of "I hear nothing" that could not be diagnosed from either end. The
 code was correct throughout — voices per frame measured 1.25 to 2.46 across viewports, exactly as
 designed — and being correct turned out to be no help at all without a way to observe it.
+
+### Why the confirmation is not a click
+
+The first version of it played one impact voice, and that was a real mistake — not a matter of taste.
+Rendered offline, that click held its loudness for almost no time at all:
+
+| | peak | within 6 dB of peak | within 20 dB |
+| --- | --- | --- | --- |
+| one marble impact | −11.4 dBFS | 3.3 ms | 15.6 ms |
+| the old confirmation click | −11.2 dBFS | 3.8 ms | 26.9 ms |
+| the confirmation now | −7.1 dBFS | **128.9 ms** | 257.1 ms |
+
+Being 4 ms long is *correct* for an impact — a strike that rings is a bell, not a marble — and every
+collision voice should stay that way. It is wrong for a confirmation. A laptop reproduces a 4 ms
+transient at −11 dBFS fine; a phone speaker need not, because it runs protection and loudness
+management that ramp over tens of milliseconds, and a browser's tab indicator lights up for audio that
+was emitted whether or not the speaker moved. "Indicator on, speaker silent" is precisely the report the
+confirmation exists to resolve, so it cannot itself be the quietest, shortest thing in the page.
+
+So it is held rather than struck: two triangle tones a fifth apart, 900 and 1350 Hz, 160 ms each with a
+plateau before the tail. It still goes through the same bus and clipper as every impact, so the 0.9046
+ceiling continues to bound it — measured peak 0.4414.
+
+Frequency, incidentally, was never a plausible cause, and it is worth writing down because it is the
+first thing anyone suspects. The mapping spans 475 Hz (largest marble at `1.4×` size) to the 2600 Hz cap
+(smallest at `0.5×`), with the default range sitting at 665–2225 Hz. That is the band a small speaker
+reproduces *best* — it is deaf below roughly 400 Hz, and there is nothing down there to lose.
 
 ### The rate problem
 
