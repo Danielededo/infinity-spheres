@@ -467,6 +467,46 @@ What is *not* verified here is the iOS behaviour itself, which needs an iPhone a
 a headless Linux runner. The mechanism is documented and the route is the one the WAV proved works on the
 device in question; that is the strongest claim the evidence supports.
 
+### Walls against marbles
+
+Wall impacts outnumber marble-marble ones at low counts and are outnumbered by them at high ones, so
+"which of the two am I hearing" has a different answer at each end. It turned out to have the *wrong*
+answer at both, and in opposite directions:
+
+| configuration | wall % of impacts | wall % of clicks, before | after |
+| --- | --- | --- | --- |
+| 30, zero g | 72.3% | 74.3% | 72.1% |
+| 30, gravity | 64.2% | 72.4% | 59.7% |
+| 200, packed | 38.8% | **82.9%** | 18.0% |
+| 600, shoal | 29.9% | **83.6%** | 7.8% |
+
+At 200 marbles well under half the impacts were at the glass, and five clicks in six were glass anyway.
+The physics was mostly marbles knocking together and the audio was almost entirely the tube.
+
+The cause is a units error. `solveWall` applies `m·(1+e)·v_n`, against the marble's full mass;
+`solveMarbles` applies `−(1+e)·v_n / (1/m₁ + 1/m₂)`, against the pair's *reduced* mass, which for two
+equal spheres is `m/2`. The same closing speed therefore delivers half the impulse at a marble as at the
+glass, and `sndReference` is a wall impulse — so the top-three-per-frame ranking was comparing two
+different quantities. `SND.pairScale` is the factor that makes them comparable.
+
+Why so large an effect from so modest a difference: keeping three impacts out of a frame is
+extreme-tail selection. At 200 marbles there are about 56 impacts per frame, so three slots is the top
+5%, and a distribution shifted even slightly right dominates that tail out of all proportion. The mean
+impulses differ by only 17% at that count; the tail went 83/17.
+
+**It scales the ranking only, never the loudness**, and that distinction cost a round to see. Scaling the
+impulse itself fixes the ordering and *also* makes every marble click `√2` louder, which took the default
+preset with gravity to a peak of 0.901 against a 0.9046 ceiling — saturating continuously. It was wrong
+on its own terms too: half the impulse *should* be quieter. The 3 dB is physics. Only the ordering was
+unfair. So the queue stores raw impulses and `sndKey` normalises for comparison, which put the peak back
+to 0.7538.
+
+Muting wall impacts altogether was considered and rejected. It is the obvious reading of "too much
+glass", but at 2–10 marbles marble-marble collisions are rare — 37 per second at the default against 90
+at the wall — so the page would go nearly silent exactly where each event is most clearly visible, and
+the tube is the thing that makes it read as a container at all. Once the ranking is fair, the mix follows
+the physics, which is the answer that needs no taste.
+
 ### The rate problem
 
 The interesting constraint is how many impacts there are, which was measured rather than guessed —

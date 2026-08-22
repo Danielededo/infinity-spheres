@@ -1315,6 +1315,22 @@ const SND = {
    * for why an impact voice was the wrong tool for that job. */
   confirmGain: 0.9,
   confirmHold: 0.16,   // seconds per note, two of them
+  /* What a marble-marble impulse has to be multiplied by to be *comparable*
+   * with a wall impulse. solveWall applies m(1+e)v_n, against the marble's full
+   * mass; solveMarbles applies -(1+e)v_n / (1/m1 + 1/m2), against the pair's
+   * reduced mass, which for two equal spheres is m/2. So the same closing speed
+   * delivers half the impulse at a marble as at the glass, and sndReference is
+   * a wall impulse — which made the top-3 ranking a comparison between two
+   * different quantities. 2 is the equal-mass case, the right single constant
+   * over a 0.55-1.15 radius range.
+   *
+   * It scales the ranking only, never the loudness, and that distinction is the
+   * whole point. Scaling the impulse itself fixed the ranking and also made
+   * every marble click sqrt(2) louder, which pushed the default preset with
+   * gravity to a peak of 0.901 against a 0.9046 ceiling — saturating constantly.
+   * And it was wrong on its own terms: half the impulse *should* be quieter.
+   * The 3 dB is physics, not a bug. Only the ordering was unfair. */
+  pairScale: 2,
 };
 
 let audio = null, audioBus = null, audioNoise = null;
@@ -1540,20 +1556,44 @@ function sndReference() {
   return r * r * r * (1 + state.restitution) * CONF.speedMax;
 }
 
-/** Offer an impact to the frame's queue. kind 0 = marble, 1 = glass. */
+/** The ranking key of queue slot i: its impulse in wall-equivalent units. The
+ *  queue stores raw impulses, because that is what the loudness mapping wants;
+ *  only the ordering is normalised. See SND.pairScale. */
+function sndKey(i) {
+  return sndKind[i] === 0 ? sndImp[i] * SND.pairScale : sndImp[i];
+}
+
+/** Offer an impact to the frame's queue. kind 0 = marble, 1 = glass.
+ *
+ *  Ranked by kind-normalised impulse, so the sort below is a fair comparison
+ *  rather than a comparison of two different quantities. See SND.pairScale for
+ *  why they differ.
+ *
+ *  Normalised for the ordering only: what is stored is the raw impulse, so the
+ *  gain mapping is untouched and a marble-marble hit stays the 3 dB quieter that
+ *  its reduced mass makes it.
+ *
+ *  This matters far more than it looks, because keeping the top three of a
+ *  frame is extreme-tail selection: at 200 marbles there are ~56 impacts per
+ *  frame, so three slots is the top 5%, and a distribution shifted even
+ *  slightly right dominates that tail out of all proportion. Measured before
+ *  the normalisation: at 200 marbles only 38.8% of impacts were wall hits, yet
+ *  82.9% of the clicks played were glass. The physics was mostly marbles
+ *  knocking together and the audio was almost entirely the tube. */
 function noteImpact(imp, r, kind) {
+  const key = kind === 0 ? imp * SND.pairScale : imp;
   if (sndN < SND.voices) {
     // Insertion sort into a list of at most three. Cheaper than a comparison
     // against a running minimum would be to maintain.
     let i = sndN++;
-    while (i > 0 && sndImp[i - 1] > imp) {
+    while (i > 0 && sndKey(i - 1) > key) {
       sndImp[i] = sndImp[i - 1]; sndRad[i] = sndRad[i - 1]; sndKind[i] = sndKind[i - 1];
       i--;
     }
     sndImp[i] = imp; sndRad[i] = r; sndKind[i] = kind;
-  } else if (imp > sndImp[0]) {
+  } else if (key > sndKey(0)) {
     let i = 0;
-    while (i + 1 < SND.voices && sndImp[i + 1] < imp) {
+    while (i + 1 < SND.voices && sndKey(i + 1) < key) {
       sndImp[i] = sndImp[i + 1]; sndRad[i] = sndRad[i + 1]; sndKind[i] = sndKind[i + 1];
       i++;
     }

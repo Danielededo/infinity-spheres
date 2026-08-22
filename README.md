@@ -92,7 +92,10 @@ than one silence. That tone is held rather than struck, because a collision clic
 phone speaker can swallow it whole while the browser still reports that audio is playing — and on a
 phone the output leaves through a media element rather than straight out of the audio graph, because
 that is the route that reaches the speaker. After that,
-every click does come from the collision that caused it: the
+every click does come from the collision that caused it, marble on marble and marble on glass alike,
+in whatever proportion the physics is producing them — which took a units fix to get right, because the
+two kinds of impulse are not measured against the same mass. The
+[balance table](docs/engineering.md#walls-against-marbles) has the before and after. Otherwise: the
 impulse the solver already computed sets how loud it is, and the marble's radius sets the pitch, because
 a sphere's ringing modes go as 1/r. Small marbles tick, large ones knock. It is synthesised, so there
 are no audio files — and it is the one control deliberately kept out of the URL hash, so a shared link
