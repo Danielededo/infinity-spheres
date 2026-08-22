@@ -431,6 +431,42 @@ first thing anyone suspects. The mapping spans 475 Hz (largest marble at `1.4×`
 (smallest at `0.5×`), with the default range sitting at 665–2225 Hz. That is the band a small speaker
 reproduces *best* — it is deaf below roughly 400 Hz, and there is nothing down there to lose.
 
+### The route out, which is not always `ctx.destination`
+
+The longer confirmation was not enough either, and what settled it was rendering the page's own output
+to a WAV and playing that file on the phone that could not hear the page. It was clearly audible — same
+speaker, same volume, same moment. Identical samples, so the difference cannot be the sound. It is the
+route.
+
+Web Audio and a media element do not leave a phone by the same path, and on iOS they do not even share
+an audio session. Web Audio gets `ambient`, which the hardware silent switch mutes and which does not
+follow the media volume; a media element gets `playback`, which is why the WAV was heard. The browser's
+tab indicator reports that audio was *emitted*, so it lights up either way — which is what made this
+invisible from both ends for four rounds.
+
+So on a coarse pointer the clipper's output goes to a `MediaStreamAudioDestinationNode` whose stream
+feeds a hidden `<audio>` element, instead of to `ctx.destination`. Same graph, same samples, the route
+that demonstrably reaches the speaker. Three guards, because a silent page is the exact failure being
+fixed:
+
+- **Coarse pointer only.** Desktop keeps the direct connection — that is what every measurement here was
+  taken through, and a media stream adds buffering between an impact and its click.
+- **`ctx.destination` is the fallback**, taken when the media route is unavailable or `play()` rejects,
+  so the worst case is the previous behaviour rather than silence. The graph is *switched*, not added to,
+  or the two routes would sum.
+- **`OfflineAudioContext` always goes direct.** It has no media stream destination, and rendering
+  samples is the whole point there.
+
+Verified in both configurations: a fine pointer reports route `destination` with no media element; a
+coarse pointer reports `element`, one element, not paused, and — tapping the stream back into a second
+`AudioContext` — a peak of 0.4421 against the 0.4414 measured offline. The same samples at the same
+level, which is the part that would otherwise have been taken on trust. `window.__scene.audioRoute()`
+reports which one was taken, because a silent page and a muted route look identical from outside.
+
+What is *not* verified here is the iOS behaviour itself, which needs an iPhone and cannot be reached from
+a headless Linux runner. The mechanism is documented and the route is the one the WAV proved works on the
+device in question; that is the strongest claim the evidence supports.
+
 ### The rate problem
 
 The interesting constraint is how many impacts there are, which was measured rather than guessed —

@@ -1367,7 +1367,8 @@ function audioGraph(ctx) {
 
   const bus = ctx.createGain();
   bus.gain.value = SND.master;
-  bus.connect(shape).connect(ctx.destination);
+  bus.connect(shape);
+  audioConnectOut(ctx, shape);
 
   // One short noise buffer, reused by every transient. The attack is what makes
   // a click read as a hard object rather than a beep.
@@ -1376,6 +1377,67 @@ function audioGraph(ctx) {
   const d = noise.getChannelData(0);
   for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
   return { bus, noise };
+}
+
+/* Where the graph ends, which is not always ctx.destination.
+ *
+ * This is evidence rather than preference. On the device that prompted it, a
+ * plain WAV of this page's own output was clearly audible from the phone's
+ * speaker while the page itself was silent — same speaker, same volume, same
+ * moment. Identical samples, so the difference cannot be the sound; it is the
+ * route. Web Audio and a media element do not leave a phone by the same path,
+ * and on iOS they do not even share an audio session: Web Audio gets "ambient",
+ * which the hardware silent switch mutes and which ignores the media volume,
+ * while a media element gets "playback", which is why the WAV was heard. The
+ * browser's tab indicator reports that audio was *emitted*, so it lights up
+ * either way — which is what made this so hard to see from the outside.
+ *
+ * So on a phone the output is handed to a media element: the same graph and the
+ * same samples, sent out along the route that demonstrably reaches the speaker.
+ *
+ * Three guards, because a silent page is the exact failure being fixed and this
+ * must not be able to cause one:
+ *   - Only on a coarse pointer. Desktop keeps the direct connection, which is
+ *     what every measurement in bench/ was taken through, and avoids the extra
+ *     buffering a media stream adds between an impact and its click.
+ *   - ctx.destination is the fallback whenever the media route is unavailable
+ *     or refuses to start, so the worst case is today's behaviour.
+ *   - An OfflineAudioContext always takes ctx.destination. It has no media
+ *     stream destination, and rendering samples is the entire point there.
+ *
+ * The element is kept in the DOM and in a module-level variable on purpose: a
+ * detached or unreferenced media element can be collected mid-playback. */
+let audioEl = null, audioRoute = 'none';
+
+function audioConnectOut(ctx, tail) {
+  const direct = () => { tail.connect(ctx.destination); audioRoute = 'destination'; };
+  if (!ctx.createMediaStreamDestination || !matchMedia('(pointer: coarse)').matches) {
+    return direct();
+  }
+  try {
+    const dest = ctx.createMediaStreamDestination();
+    tail.connect(dest);
+    const el = document.createElement('audio');
+    el.srcObject = dest.stream;
+    el.autoplay = true;
+    el.playsInline = true;                 // iOS: do not hand this to a player
+    el.setAttribute('aria-hidden', 'true');
+    el.style.display = 'none';
+    document.body.appendChild(el);
+    audioEl = el;
+    audioRoute = 'element';
+    /* If play() rejects, the stream is going nowhere and the fallback has to
+     * happen — but the graph is already connected to the stream, so switch
+     * rather than add, or the two routes would sum. */
+    Promise.resolve(el.play()).catch(() => {
+      try { tail.disconnect(dest); } catch (e) { /* already gone */ }
+      el.remove();
+      audioEl = null;
+      direct();
+    });
+  } catch (e) {
+    direct();
+  }
 }
 
 /** One impact: a damped tone for the body, a very short filtered noise burst
@@ -2798,6 +2860,9 @@ window.__scene = {
   sndReset() { sndN = 0; },
   // The context's own state, which is otherwise unobservable from outside.
   audioState() { return audio ? audio.state : 'none'; },
+  // Which way the output left the graph. A silent page and a muted route look
+  // identical from the outside, so the choice has to be readable.
+  audioRoute() { return audioRoute; },
   get curve() { return curve; },
   get LENGTH() { return LENGTH; },
   get SAMPLES() { return SAMPLES; },

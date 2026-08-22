@@ -89,7 +89,9 @@ Clicking a marble selects it — the raycast tests only marbles, so you can pick
 **Sound** is off until you ask for it, and turning it on plays one deliberate two-note tone straight
 away — so "it is off", "it is broken" and "nothing loud is happening right now" are three answers rather
 than one silence. That tone is held rather than struck, because a collision click is 4 ms long and a
-phone speaker can swallow it whole while the browser still reports that audio is playing. After that,
+phone speaker can swallow it whole while the browser still reports that audio is playing — and on a
+phone the output leaves through a media element rather than straight out of the audio graph, because
+that is the route that reaches the speaker. After that,
 every click does come from the collision that caused it: the
 impulse the solver already computed sets how loud it is, and the marble's radius sets the pitch, because
 a sphere's ringing modes go as 1/r. Small marbles tick, large ones knock. It is synthesised, so there
