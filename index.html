@@ -328,6 +328,9 @@
     <button id="btn-ride" aria-pressed="false">Ride a marble</button>
     <button id="btn-quality" aria-pressed="false">Quality: high</button>
   </div>
+  <div class="btns">
+    <button id="btn-sound" aria-pressed="false">Sound</button>
+  </div>
 
   <details class="more">
     <summary>more</summary>
@@ -369,8 +372,8 @@
 
   <p class="keys">
     <kbd>space</kbd> pause · <kbd>G</kbd> glass · <kbd>V</kbd> gravity · <kbd>T</kbd> trails ·
-    <kbd>A</kbd> spin · <kbd>F</kbd> ride · <kbd>Q</kbd> quality · <kbd>R</kbd> reset ·
-    <kbd>M</kbd> menu · <kbd>H</kbd> hide
+    <kbd>A</kbd> spin · <kbd>F</kbd> ride · <kbd>Q</kbd> quality · <kbd>S</kbd> sound ·
+    <kbd>R</kbd> reset · <kbd>M</kbd> menu · <kbd>H</kbd> hide
   </p>
   </div>
 </div>
@@ -458,6 +461,11 @@ const state = {
   // serialised into the hash: a shared link should not override the setting a
   // visitor chose in their own operating system.
   spin: !matchMedia('(prefers-reduced-motion: reduce)').matches,
+  // Off until asked for, and — like `spin` above — deliberately absent from the
+  // hash. A browser will not start an AudioContext without a gesture anyway,
+  // but the stronger reason is that a shared link must never arrive making
+  // noise.
+  sound: false,
   heavyOne: false,     // the "one heavy" preset: first marble at max size
   ride: false,         // camera rides the selected marble instead of orbiting
   curve: 'lemniscate', // which spine, out of CURVES
@@ -1236,6 +1244,260 @@ function applyGlassMode() {
 }
 
 /* ------------------------------------------------------------------ *
+ * Sound
+ *
+ * The impacts are already computed: solveMarbles works out the impulse
+ * `-(1+e)*vn / (1/mA + 1/mB)` for every pair that closes, and solveWall applies
+ * `m*(1+e)*vn` at the glass. Those are the numbers that should set how loud a
+ * click is, so the audio is derived from the physics rather than sprinkled on
+ * top of it. Radius sets the pitch, because a sphere's ringing modes go as 1/r —
+ * so the small marbles tick and the large ones knock, over the 2.1x spread the
+ * radius range allows.
+ *
+ * Everything is synthesised. Samples would mean asset files, and this page is
+ * one file with no build step.
+ *
+ * The hard part is the event rate, which was measured rather than guessed —
+ * impacts per simulated second, after letting the scene settle:
+ *
+ *                        marble    wall    total
+ *   30, zero g               37      90      127
+ *   30, gravity              97     179      276
+ *   168 (Packed)          2 046   1 321    3 367
+ *   998 small, gravity   30 565   8 719   39 284
+ *
+ * A voice per impact is therefore out at any count: even the default would
+ * create 127 oscillators a second, and the top of the range is impossible. So
+ * each frame keeps only the SND.perFrame hardest impacts and drops the rest.
+ * At 30 marbles that is about two per frame and almost nothing is dropped; at
+ * 998 it is a 200-to-1 decimation, and choosing by impulse means what survives
+ * is what a listener would have picked out anyway.
+ *
+ * The bias is worth naming: always taking the loudest makes the quiet texture
+ * of a dense scene disappear rather than thin out. A random survivor among the
+ * loud ones would keep more of that texture, at the cost of a rule nobody can
+ * predict from the code.
+ *
+ * Loudness is normalised against a reference impulse derived from the current
+ * mass and speed scale, not against a constant. The impulse distribution moves
+ * by 6x between presets — median 7.9 at 30 marbles against 0.94 at 998 small
+ * ones, because mass goes as r^3 — so a fixed mapping would leave Shoal
+ * inaudible. Normalising keeps the dynamics inside a scene while making the
+ * presets comparable to each other.
+ * ------------------------------------------------------------------ */
+const SND = {
+  voices: 3,           // new voices per frame, i.e. the top-N kept
+  /* Levels, set by measuring rather than by ear — the rendered peak of one
+   * voice, not the gain it was asked for. Those differ by a factor of four
+   * here, and the reason is worth knowing: the envelope decays so fast that a
+   * 650 Hz sine is barely through its first half-cycle when the peak has
+   * already passed, so the product never reaches the requested amplitude. Asking
+   * for 0.3 into a 0.22 bus produced a peak of 0.017, about -35 dBFS, which is
+   * inaudible on a laptop. These numbers put one voice near -16 dBFS. */
+  master: 0.5,
+  voiceGain: 0.55,     // multiplies the normalised impulse
+  knee: 0.6,           // the soft clipper is linear below this
+  /* What the clipper's curve reaches at full input: knee + (1-knee)*tanh(1),
+   * which is 0.9046. Kept here so a test can assert against it rather than a
+   * magic number, and it is a real bound: twenty, sixty and two hundred voices
+   * fired simultaneously all render to exactly this. In practice the frame cap
+   * keeps things far below it — the worst case it can produce, three voices
+   * every frame for a second, measures 0.55. */
+  ceiling: 0.6 + 0.4 * Math.tanh(1),
+  fRef: 900,           // hertz at rRef, scaled by rRef/r
+  rRef: 0.85,          // the middle of the default radius range
+  fMax: 2600,          // small marbles at small sizeScale would otherwise pierce
+  floor: 0.04,         // impulses below this share of the reference are silent
+  decayMarble: 0.075,  // seconds; a marble is a short, dead click
+  decayGlass: 0.16,    // the tube rings longer and brighter
+};
+
+let audio = null, audioBus = null, audioNoise = null;
+
+/* Build the bus, the limiter and the noise buffer in whichever context is
+ * handed over.
+ *
+ * Split out with the context as a parameter so the same code can be rendered
+ * into an OfflineAudioContext and measured. A test that rebuilt an equivalent
+ * graph of its own would only ever prove that the copy behaves — and would go
+ * on passing after this one changed. */
+function audioGraph(ctx) {
+  /* A soft clipper, not a compressor.
+   *
+   * Three voices can land in the same millisecond and their tails overlap for a
+   * tenth of a second, so the peak is not something to reason about loosely —
+   * and clipping is the one artefact that would make the whole thing sound
+   * cheap. The first attempt used a DynamicsCompressor as a limiter and it did
+   * not hold: rendered peaks reached 1.0131 on the Shoal preset and 0.9943 with
+   * gravity. A compressor has an attack time, and every event here *is* a
+   * transient, so it is always being surprised — 2 ms of attack against clicks
+   * arriving 180 times a second is no defence at all.
+   *
+   * A waveshaper has no time constant. Below the knee it is a straight line, so
+   * ordinary impacts pass through untouched; above it the curve bends, and since
+   * a waveshaper clamps its input to [-1, 1], the output cannot pass the curve's
+   * endpoint. Gentle saturation on a dense rattle is also a nicer failure mode
+   * than a square edge.
+   *
+   * `oversample` is 'none' deliberately, and that is the second correction here.
+   * With '4x' the resampling filters ring and overshoot the endpoint, so the
+   * bound stops being a bound — measured peaks of 0.9078 at twenty simultaneous
+   * voices, 1.0568 at sixty and 1.2711 at two hundred, the last two of them
+   * clipping. With 'none' all three measure 0.9046, which is the curve's
+   * endpoint to four decimals. Oversampling exists to keep a nonlinearity from
+   * aliasing, and it costs nothing here because below the knee this curve is not
+   * a nonlinearity at all — it is exactly linear, which is where every ordinary
+   * signal lives. The bend only ever sees a pile-up. */
+  const shape = ctx.createWaveShaper();
+  const N = 1024, knee = SND.knee, span = 1 - knee;
+  const curve = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    const y = a <= knee ? a : knee + span * Math.tanh((a - knee) / span);
+    curve[i] = Math.sign(x) * y;
+  }
+  shape.curve = curve;
+  shape.oversample = 'none';         // see the note on the bound, below
+
+  const bus = ctx.createGain();
+  bus.gain.value = SND.master;
+  bus.connect(shape).connect(ctx.destination);
+
+  // One short noise buffer, reused by every transient. The attack is what makes
+  // a click read as a hard object rather than a beep.
+  const n = Math.floor(ctx.sampleRate * 0.02);
+  const noise = ctx.createBuffer(1, n, ctx.sampleRate);
+  const d = noise.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  return { bus, noise };
+}
+
+/** One impact: a damped tone for the body, a very short filtered noise burst
+ *  for the strike. Created per event and left to be collected once stopped,
+ *  which is the ordinary Web Audio pattern. */
+function audioVoice(ctx, g, at, freq, gain, decay, glass) {
+  const osc = ctx.createOscillator();
+  osc.type = glass ? 'triangle' : 'sine';
+  osc.frequency.setValueAtTime(freq, at);
+  // A touch of downward drift: a struck object's pitch sags as it rings.
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.94, at + decay);
+
+  const env = ctx.createGain();
+  env.gain.setValueAtTime(0, at);
+  env.gain.linearRampToValueAtTime(gain, at + 0.0015);
+  env.gain.exponentialRampToValueAtTime(1e-4, at + decay);
+  osc.connect(env).connect(g.bus);
+  osc.start(at);
+  osc.stop(at + decay + 0.02);
+
+  const click = ctx.createBufferSource();
+  click.buffer = g.noise;
+  const bp = ctx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = Math.min(9000, freq * 4);
+  bp.Q.value = 1.2;
+  const cg = ctx.createGain();
+  cg.gain.setValueAtTime(gain * (glass ? 0.5 : 0.35), at);
+  cg.gain.exponentialRampToValueAtTime(1e-4, at + 0.012);
+  click.connect(bp).connect(cg).connect(g.bus);
+  click.start(at);
+  click.stop(at + 0.03);
+}
+
+/** Frequency and gain for one queued impact, or null if it is below the floor.
+ *  Pure arithmetic, so the mapping can be checked without making a sound. */
+function impactVoice(imp, r, kind, ref) {
+  const norm = Math.min(1, imp / ref);
+  if (norm < SND.floor) return null;
+  const glass = kind === 1;
+  return {
+    freq: Math.min(SND.fMax, SND.fRef * (SND.rRef / r) * (glass ? 1.6 : 1)),
+    // Square root rather than linear: loudness is perceptual, and the quiet
+    // majority of impacts would otherwise vanish under the few hard ones.
+    gain: Math.sqrt(norm) * SND.voiceGain,
+    decay: glass ? SND.decayGlass : SND.decayMarble,
+    glass,
+  };
+}
+
+/* The queue the solvers write into: the loudest SND.voices impacts of the
+ * current frame, kept sorted quietest-first so an insert only has to look at
+ * one end. Fixed-size typed arrays, written in place — nothing here may
+ * allocate, because it runs inside the physics loop and ALLOC_PER_STEP is
+ * gated at zero. */
+const sndImp = new Float32Array(SND.voices);
+const sndRad = new Float32Array(SND.voices);
+const sndKind = new Uint8Array(SND.voices);
+let sndN = 0;
+
+/** Reference impulse for the current settings: a heavy marble at the top of the
+ *  speed range. Tracks the size slider, so the mapping follows the scene. */
+function sndReference() {
+  const r = Math.min(CONF.rMax * state.sizeScale, R * 0.55);
+  return r * r * r * (1 + state.restitution) * CONF.speedMax;
+}
+
+/** Offer an impact to the frame's queue. kind 0 = marble, 1 = glass. */
+function noteImpact(imp, r, kind) {
+  if (sndN < SND.voices) {
+    // Insertion sort into a list of at most three. Cheaper than a comparison
+    // against a running minimum would be to maintain.
+    let i = sndN++;
+    while (i > 0 && sndImp[i - 1] > imp) {
+      sndImp[i] = sndImp[i - 1]; sndRad[i] = sndRad[i - 1]; sndKind[i] = sndKind[i - 1];
+      i--;
+    }
+    sndImp[i] = imp; sndRad[i] = r; sndKind[i] = kind;
+  } else if (imp > sndImp[0]) {
+    let i = 0;
+    while (i + 1 < SND.voices && sndImp[i + 1] < imp) {
+      sndImp[i] = sndImp[i + 1]; sndRad[i] = sndRad[i + 1]; sndKind[i] = sndKind[i + 1];
+      i++;
+    }
+    sndImp[i] = imp; sndRad[i] = r; sndKind[i] = kind;
+  }
+}
+
+/** Build the audio graph. Called on the first enable, because a browser will
+ *  not let an AudioContext start without a gesture. */
+function audioInit() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return false;
+  audio = new Ctx();
+  const g = audioGraph(audio);
+  audioBus = g.bus;
+  audioNoise = g.noise;
+  return true;
+}
+
+/** Turn the frame's queued impacts into voices. Called once per frame from the
+ *  animation loop, never from inside the physics. */
+function playImpacts() {
+  if (!audio || audio.state !== 'running') { sndN = 0; return; }
+  const ref = sndReference();
+  const g = { bus: audioBus, noise: audioNoise };
+  const t = audio.currentTime;
+  for (let i = 0; i < sndN; i++) {
+    const v = impactVoice(sndImp[i], sndRad[i], sndKind[i], ref);
+    if (v) audioVoice(audio, g, t, v.freq, v.gain, v.decay, v.glass);
+  }
+  sndN = 0;
+}
+
+/** Enable or disable, building the graph the first time. */
+function setSound(on) {
+  state.sound = on;
+  if (on) {
+    if (!audio && !audioInit()) { state.sound = false; return; }
+    audio.resume();
+  } else if (audio) {
+    audio.suspend();
+    sndN = 0;
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Trails
  *
  * Every marble's recent path, in a single LineSegments. One geometry rather
@@ -1863,6 +2125,8 @@ function collide(A, B, e) {
     A.vel.x -= nx * imp / A.m; A.vel.y -= ny * imp / A.m; A.vel.z -= nz * imp / A.m;
     B.vel.x += nx * imp / B.m; B.vel.y += ny * imp / B.m; B.vel.z += nz * imp / B.m;
     hits++;
+    // The smaller body rings higher and dominates what a listener hears.
+    if (state.sound) noteImpact(imp < 0 ? -imp : imp, A.r < B.r ? A.r : B.r, 0);
   }
 
   const overlap = minDist - dist;
@@ -1978,6 +2242,7 @@ function solveWall() {
       m.vel.y -= (1 + e) * vn * ny;
       m.vel.z -= (1 + e) * vn * nz;
       wallHits++;
+      if (state.sound) noteImpact(m.m * (1 + e) * vn, m.r, 1);
     }
     p.set(n.qx + nx * limit, n.qy + ny * limit, n.qz + nz * limit);
   }
@@ -2067,6 +2332,8 @@ renderer.setAnimationLoop(() => {
   if (!paused) {
     step(dt);
     if (state.trails) { recordTrails(); updateTrails(); }
+    // Outside step(), so nothing in the physics loop ever touches Web Audio.
+    if (state.sound) playImpacts();
   }
   // Riding drives the camera directly, so OrbitControls must not also run:
   // update() re-derives the position from its own spherical state and would
@@ -2106,6 +2373,7 @@ const btn = {
   pause: $('btn-pause'), glass: $('btn-glass'), gravity: $('btn-gravity'),
   trails: $('btn-trails'), spin: $('btn-spin'), reset: $('btn-reset'),
   menu: $('btn-menu'), ride: $('btn-ride'), quality: $('btn-quality'),
+  sound: $('btn-sound'),
 };
 const selBox = $('sel-box'), selId = $('sel-id'), selInfo = $('sel-info');
 const head = { spine: $('hud-spine'), glyph: $('hud-glyph'), sub: $('hud-sub') };
@@ -2147,6 +2415,7 @@ function syncUI({ rebuild = false } = {}) {
   btn.ride.textContent = state.ride ? 'Stop riding' : 'Ride a marble';
   btn.quality.textContent = `Quality: ${state.quality}`;
   btn.quality.setAttribute('aria-pressed', String(state.quality === 'high'));
+  btn.sound.setAttribute('aria-pressed', String(state.sound));
 
   /* The header names the spine on screen rather than one fixed curve. The glyph
    * is empty for the two rosettes, and the CSS hides an empty <em> so the line
@@ -2257,6 +2526,8 @@ function setRide(on) {
 }
 
 btn.ride.addEventListener('click', () => setRide(!state.ride));
+
+btn.sound.addEventListener('click', () => { setSound(!state.sound); syncUI(); });
 
 btn.quality.addEventListener('click', () => {
   state.quality = state.quality === 'high' ? 'fast' : 'high';
@@ -2402,6 +2673,7 @@ addEventListener('keydown', (e) => {
     case 'KeyT': state.trails = !state.trails; syncUI(); break;
     case 'KeyA': state.spin = !state.spin; syncUI(); break;
     case 'KeyF': setRide(!state.ride); break;
+    case 'KeyS': setSound(!state.sound); syncUI(); break;
     case 'KeyQ':
       state.quality = state.quality === 'high' ? 'fast' : 'high';
       applyQuality(); syncUI(); break;
@@ -2451,6 +2723,19 @@ window.__scene = {
   marbles, nearestOnSpine, step, totalEnergy, state, R, CONF,
   renderer, scene, camera, controls, setRide, setCurve, applyQuality,
   marbleMesh, CURVES, PALETTE,
+  // The audio pieces, so the synth can be rendered into an OfflineAudioContext
+  // and measured rather than taken on trust.
+  SND, audioGraph, audioVoice, impactVoice, sndReference, noteImpact, setSound,
+  // The frame's pending impacts, quietest first. Exposed so the selection rule
+  // can be tested: which impacts survive is inaudible when it goes wrong.
+  get sndQueue() {
+    return { n: sndN, imp: Array.from(sndImp.subarray(0, sndN)),
+             rad: Array.from(sndRad.subarray(0, sndN)),
+             kind: Array.from(sndKind.subarray(0, sndN)) };
+  },
+  sndReset() { sndN = 0; },
+  // The context's own state, which is otherwise unobservable from outside.
+  audioState() { return audio ? audio.state : 'none'; },
   get curve() { return curve; },
   get LENGTH() { return LENGTH; },
   get SAMPLES() { return SAMPLES; },

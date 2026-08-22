@@ -14,6 +14,7 @@ to use the page.
 - [How many fit](#how-many-fit) — what actually capped the count at 40
 - [Other spines](#other-spines) — three that work, four reasons the rest do not
 - [Rendering](#rendering) — the palette, the instancing, the quality switch
+- [Sound](#sound) — derived from the impulses, and the rate problem that shaped it
 - [Riding a marble](#riding-a-marble)
 - [On a phone](#on-a-phone)
 - [The energy readout](#the-energy-readout) — including the one place the physics is knowingly wrong
@@ -375,6 +376,97 @@ Most candidate curves fail, and it is worth knowing why:
   setting always written into the URL hash, because a link that left it out would not reproduce on
   another machine.
 - `OrbitControls` with damping and a slow auto-orbit.
+
+## Sound
+
+Every click is derived from the collision that caused it. `solveMarbles` already computes the impulse
+`−(1+e)·v_n / (1/m₁ + 1/m₂)` for each pair that closes, and `solveWall` applies `m·(1+e)·v_n` at the
+glass; those are the numbers that set loudness. Radius sets pitch, because a sphere's ringing modes go
+as `1/r` — so over the 0.55–1.15 radius range the small marbles tick and the large ones knock, about an
+octave apart. Everything is synthesised: samples would mean asset files, and this page is one file with
+no build step.
+
+### The rate problem
+
+The interesting constraint is how many impacts there are, which was measured rather than guessed —
+per simulated second, after letting each scene settle:
+
+| configuration | marble | wall | total |
+| --- | --- | --- | --- |
+| 30, zero g | 37 | 90 | **127** |
+| 30, gravity | 97 | 179 | **276** |
+| 168 (Packed) | 2 046 | 1 321 | **3 367** |
+| 168, gravity | 3 476 | 2 033 | **5 509** |
+| 998 small | 15 614 | 5 029 | **20 643** |
+| 998 small, gravity | 30 565 | 8 719 | **39 284** |
+
+A voice per impact is therefore out at *any* count: even the default would create 127 oscillators a
+second, and the top of the range is three hundred times that. So each frame keeps only the three
+hardest impacts and drops the rest. At 30 marbles that is about two per frame and almost nothing is
+lost; at 998 it is a 200-to-1 decimation, and selecting by impulse means what survives is what a
+listener would have picked out anyway.
+
+The bias is worth naming rather than hiding: always taking the loudest makes the quiet texture of a
+dense scene disappear rather than thin out. A random survivor among the loud ones would keep more of
+that texture, at the cost of a rule nobody could predict from the code.
+
+Loudness is normalised against a reference impulse derived from the current mass and speed scale, not
+against a constant, because the impulse distribution moves by 6× between presets — median 7.9 at 30
+marbles against 0.94 at 998 small ones, since mass goes as `r³`. A fixed mapping would have left Shoal
+inaudible.
+
+The queue the solvers write into is three fixed-size typed arrays with an insertion sort over three
+slots. It has to be: it runs inside the physics loop, where `ALLOC_PER_STEP` is gated at zero. Web
+Audio is never touched from in there — the queue is drained once per frame from the animation loop.
+
+### Making sure it does not clip
+
+Two attempts, and the first was wrong in an instructive way.
+
+A `DynamicsCompressor` as a limiter **did not hold**: rendered peaks reached 1.0131 on Shoal and 0.9943
+with gravity. A compressor has an attack time, and every event here *is* a transient, so 2 ms of attack
+against clicks arriving 180 times a second is no defence at all.
+
+A `WaveShaper` has no time constant. Below the knee it is a straight line, so ordinary impacts pass
+through untouched; above it the curve bends, and since a waveshaper clamps its input to `[-1, 1]` the
+output cannot pass the curve's endpoint. That endpoint is `0.6 + 0.4·tanh(1) = 0.9046`.
+
+The second correction: `oversample` has to be `'none'`. With `'4x'` the resampling filters ring and
+overshoot the endpoint, so the bound stops being one:
+
+| simultaneous voices | `oversample: '4x'` | `oversample: 'none'` |
+| --- | --- | --- |
+| 20 | 0.9078 | 0.9046 |
+| 60 | **1.0568** | 0.9046 |
+| 200 | **1.2711** | 0.9046 |
+
+Oversampling exists to stop a nonlinearity aliasing, and it costs nothing here because below the knee
+this curve is not a nonlinearity at all — it is exactly linear, which is where every ordinary signal
+lives. The bend only ever sees a pile-up.
+
+### What was verified
+
+The synth is not tested by a reimplementation of itself. `audioGraph` and `audioVoice` take the audio
+context as a parameter precisely so the shipping code can be rendered into an `OfflineAudioContext` and
+measured — a test that rebuilt an equivalent graph would only ever prove the copy behaves, and would go
+on passing after the original changed.
+
+| check | result |
+| --- | --- |
+| Pitch follows `1/r` | expected 1391 / 900 / 665 Hz at r = 0.55 / 0.85 / 1.15, measured 1375 / 889 / 657 |
+| One voice | peak 0.267 (−11.5 dBFS) |
+| Three at once, the frame cap's worst case | 0.561 |
+| Three every frame for a second | 0.551 |
+| 20, 60, 200 voices at once | 0.9046 in all three — the bound holds |
+| Click decays | −70 dB by the stated decay time, silent at twice it |
+| Queue keeps the loudest | five cases including ties and under-fill, all correct |
+
+The measured pitches sit about 1.2% below the target because of the deliberate downward pitch drift a
+struck object has as it rings, which pulls the spectral peak down.
+
+Whole runs are also rendered to WAV through the real simulation and the real selection rule, which is
+how the level and density were judged by ear rather than by argument: peaks 0.58 (default), 0.77
+(gravity), 0.71 (Packed), 0.83 (Shoal).
 
 ## Riding a marble
 
