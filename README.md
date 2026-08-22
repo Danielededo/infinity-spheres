@@ -71,6 +71,7 @@ in [How it works → How many fit](docs/engineering.md#how-many-fit).
 | Reset — new colours and velocities | **Reset** | <kbd>R</kbd> |
 | Ride the selected marble | **Ride a marble** | <kbd>F</kbd> |
 | Quality: high ⇄ fast | **Quality** | <kbd>Q</kbd> |
+| Sound | **Sound** | <kbd>S</kbd> |
 | Inspect a marble | click it | — |
 | Fold the panel away | **▲ / ▼** | <kbd>M</kbd> |
 | Show or hide the panel | — | <kbd>H</kbd> |
@@ -84,6 +85,13 @@ Under **more**: six presets, three camera poses, a PNG export, and **Copy link**
 
 Clicking a marble selects it — the raycast tests only marbles, so you can pick one you can see
 *through* the glass — and **Ride a marble** puts the camera behind it, pointed down the tube.
+
+**Sound** is off until you ask for it, and every click comes from the collision that caused it: the
+impulse the solver already computed sets how loud it is, and the marble's radius sets the pitch, because
+a sphere's ringing modes go as 1/r. Small marbles tick, large ones knock. It is synthesised, so there
+are no audio files — and it is the one control deliberately kept out of the URL hash, so a shared link
+can never arrive making noise. [How it works → Sound](docs/engineering.md#sound) has the event-rate
+measurements that shaped it.
 
 On a phone the panel is a bottom bar that starts folded, and the camera re-frames itself for a portrait
 window. What it does, and what it deliberately does not, is in
