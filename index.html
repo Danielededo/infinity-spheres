@@ -1334,6 +1334,8 @@ const SND = {
 };
 
 let audio = null, audioBus = null, audioNoise = null;
+// setSound's asynchronous bookkeeping; see the comment there.
+let sndGen = 0, sndConfirmUntil = 0;
 
 /* Build the bus, the limiter and the noise buffer in whichever context is
  * handed over.
@@ -1543,7 +1545,12 @@ function impactVoice(imp, r, kind, ref) {
  * current frame, kept sorted quietest-first so an insert only has to look at
  * one end. Fixed-size typed arrays, written in place — nothing here may
  * allocate, because it runs inside the physics loop and ALLOC_PER_STEP is
- * gated at zero. */
+ * gated at zero.
+ *
+ * "Quietest-first" is by sndKey, not by the stored impulse, so sndImp itself is
+ * not monotonic — [15.09, 7.56, 11.04] is correctly ordered when the first is a
+ * wall hit and the others are marble hits, because the keys are then 15.09,
+ * 15.12 and 22.08. Worth stating because it looks like a broken sort. */
 const sndImp = new Float32Array(SND.voices);
 const sndRad = new Float32Array(SND.voices);
 const sndKind = new Uint8Array(SND.voices);
@@ -1627,6 +1634,43 @@ function playImpacts() {
   sndN = 0;
 }
 
+/* Muting, which is what "off" has to actually mean.
+ *
+ * It did not mean that. Off stopped queueing impacts and asked the context to
+ * suspend, and nothing anywhere silenced the graph — so everything already
+ * scheduled went on sounding until the suspend happened to land. Toggling
+ * quickly makes that audible and reproducible: with an odd number of fast
+ * presses the button reads "Sound: off" and the context reads "suspended"
+ * while the output still carries a burst measured at up to 0.905, the clipper's
+ * own ceiling, in the first 250 ms.
+ *
+ * Two requests that a platform may take its time over are not a guarantee. A
+ * gain of zero on the bus is: every voice is connected to it, the waveshaper
+ * maps zero to zero, and it takes effect on the audio clock rather than when a
+ * promise resolves. So the bus is the mute, and suspend becomes an optimisation
+ * on top of it rather than the mechanism.
+ *
+ * The fade is 8 ms rather than a step because cutting a ringing voice to zero
+ * instantaneously is a discontinuity, which is a click — and a click on the way
+ * out is precisely the complaint. */
+const SND_FADE = 0.008;
+
+function audioMute() {
+  const t = audio.currentTime;
+  audioBus.gain.cancelScheduledValues(t);
+  audioBus.gain.setValueAtTime(audioBus.gain.value, t);
+  audioBus.gain.linearRampToValueAtTime(0, t + SND_FADE);
+}
+
+function audioUnmute() {
+  const t = audio.currentTime;
+  audioBus.gain.cancelScheduledValues(t);
+  audioBus.gain.setValueAtTime(SND.master, t);
+  if (audioEl && audioEl.srcObject) {
+    for (const tr of audioEl.srcObject.getAudioTracks()) tr.enabled = true;
+  }
+}
+
 /** Enable or disable, building the graph the first time.
  *
  *  Enabling plays one deliberate two-note tone, and that is not decoration.
@@ -1645,15 +1689,42 @@ function playImpacts() {
  *  because resume() has not always returned one. */
 function setSound(on) {
   state.sound = on;
+  /* Every asynchronous tail below is stamped with this. resume(), suspend() and
+   * the post-fade teardown all land after the call that started them, and a
+   * toggle pressed in between must invalidate them rather than let them apply to
+   * a state they were not asked about. Checking state.sound was not enough: it
+   * cannot tell "still on" from "off and on again", which is how a stale resume
+   * used to schedule a second confirmation on top of the first. */
+  const gen = ++sndGen;
   if (on) {
     if (!audio && !audioInit()) { state.sound = false; return; }
+    audioUnmute();
     Promise.resolve(audio.resume()).then(() => {
-      if (!state.sound) return;               // turned off again in the meantime
+      if (gen !== sndGen) return;
+      /* One confirmation at a time. Each enable used to schedule another 0.4 s
+       * tone regardless of whether the last was still sounding, and a handful of
+       * quick presses stacked them into the clipper — measured at 0.9046, the
+       * ceiling exactly. */
+      if (audio.currentTime < sndConfirmUntil) return;
+      sndConfirmUntil = audio.currentTime + 2 * SND.confirmHold + 0.16;
       audioConfirm(audio, { bus: audioBus, noise: audioNoise }, audio.currentTime + 0.02);
     }).catch(() => {});
   } else if (audio) {
-    audio.suspend();
+    audioMute();
     sndN = 0;
+    /* Suspending is left until the fade has run, so the fade is what silences
+     * the graph and the suspend only stops a context that is already quiet.
+     * Disabling the track is a second, independent guarantee — a disabled
+     * MediaStreamTrack emits silence whatever the context is doing — and it
+     * releases the phone's audio session, which was otherwise held open by an
+     * element still playing a live stream with the feature switched off. */
+    setTimeout(() => {
+      if (gen !== sndGen) return;             // switched back on in the meantime
+      if (audioEl && audioEl.srcObject) {
+        for (const tr of audioEl.srcObject.getAudioTracks()) tr.enabled = false;
+      }
+      Promise.resolve(audio.suspend()).catch(() => {});
+    }, 40);
   }
 }
 
@@ -2903,6 +2974,8 @@ window.__scene = {
   // Which way the output left the graph. A silent page and a muted route look
   // identical from the outside, so the choice has to be readable.
   audioRoute() { return audioRoute; },
+  // The bus gain, which is what actually decides whether anything is audible.
+  busGain() { return audioBus ? audioBus.gain.value : -1; },
   get curve() { return curve; },
   get LENGTH() { return LENGTH; },
   get SAMPLES() { return SAMPLES; },

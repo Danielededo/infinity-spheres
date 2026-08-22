@@ -507,6 +507,54 @@ at the wall — so the page would go nearly silent exactly where each event is m
 the tube is the thing that makes it read as a container at all. Once the ranking is fair, the mix follows
 the physics, which is the answer that needs no taste.
 
+### What "off" has to mean
+
+Reported: sound audible with the toggle off. It was, and the reason is that
+nothing in the page silenced anything. Off did two things — stop queueing impacts, and ask the context to
+suspend — and neither is a guarantee. Everything already scheduled kept sounding until the suspend
+happened to land, and the bus stayed wide open the whole time.
+
+Toggling quickly makes it reproducible. With an odd number of fast presses the button reads `Sound: off`
+and the context reads `suspended`, while the output still carries a burst measured at up to **0.905** —
+the clipper's own ceiling — inside the first 250 ms:
+
+| | peak while off, before | after |
+| --- | --- | --- |
+| one press, settled | 0 | 0 |
+| 9 presses, no gap | 0.440 | 0.440, gone within 100 ms |
+| 21 presses, 10 ms apart | 0.905 | 0.004 |
+
+Two things caused the level. Each enable scheduled another 0.4 s confirmation regardless of whether the
+last was still sounding, so a handful of presses stacked them into the clipper — 0.9046, the endpoint
+exactly. And `setSound` guarded its async tail with `state.sound`, which cannot tell "still on" from "off
+and on again", so a stale `resume()` could schedule a confirmation the user never asked for.
+
+The fix is to stop treating suspension as the mechanism:
+
+- **The bus is the mute.** Every voice connects to it, the waveshaper maps zero to zero, and a gain
+  change takes effect on the audio clock rather than when a promise resolves. It fades over 8 ms rather
+  than stepping, because cutting a ringing voice to zero instantaneously is a discontinuity — which is a
+  click, and a click on the way out is exactly the complaint.
+- **The track is a second, independent guarantee.** A disabled `MediaStreamTrack` emits silence whatever
+  the context is doing, and disabling it releases the phone's audio session, which was otherwise held
+  open by an element still playing a live stream with the feature switched off.
+- **Suspension is deferred behind the fade** and its promise is caught, so it stops a context that is
+  already quiet instead of being the thing expected to make it quiet.
+- **A generation token** stamps every async tail, so a toggle pressed before one lands invalidates it.
+
+What remains is a tail of up to 100 ms, and it is not removable: the coarse-pointer route sends audio
+through a media element, which buffers, and audio already handed to the element cannot be retracted. It
+reads as the sound stopping rather than as sound continuing.
+
+Two theories were tested and **not** reproduced, which is worth recording so they are not re-proposed: a
+single settled press of off was already silent before the fix, in both routes; and an external `resume()`
+of the suspended context — a browser or phone OS waking it on tab focus or an audio-session change — did
+not thaw frozen voices into audibility. A third attempt to measure a single off mid-rattle was abandoned
+as too flaky to conclude from: at 600 marbles the headless renderer manages about 1 fps, so almost no
+voices are produced, and a first version of that test reported all-zeros on **both** sides of a change
+that demonstrably alters the graph. It was measuring nothing. Any test here whose only possible output is
+zeros needs a positive control before its zeros mean anything.
+
 ### The rate problem
 
 The interesting constraint is how many impacts there are, which was measured rather than guessed —
