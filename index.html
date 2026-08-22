@@ -2725,7 +2725,7 @@ window.__scene = {
   marbleMesh, CURVES, PALETTE,
   // The audio pieces, so the synth can be rendered into an OfflineAudioContext
   // and measured rather than taken on trust.
-  SND, audioGraph, audioVoice, impactVoice, sndReference, noteImpact, setSound,
+  SND, audioGraph, audioVoice, impactVoice, sndReference, noteImpact, setSound, playImpacts,
   // The frame's pending impacts, quietest first. Exposed so the selection rule
   // can be tested: which impacts survive is inaudible when it goes wrong.
   get sndQueue() {
