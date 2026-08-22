@@ -501,11 +501,33 @@ on its own terms too: half the impulse *should* be quieter. The 3 dB is physics.
 unfair. So the queue stores raw impulses and `sndKey` normalises for comparison, which put the peak back
 to 0.7538.
 
-Muting wall impacts altogether was considered and rejected. It is the obvious reading of "too much
-glass", but at 2–10 marbles marble-marble collisions are rare — 37 per second at the default against 90
-at the wall — so the page would go nearly silent exactly where each event is most clearly visible, and
-the tube is the thing that makes it read as a container at all. Once the ranking is fair, the mix follows
-the physics, which is the answer that needs no taste.
+### Silencing the glass
+
+Once the ranking was fair, the mix followed the physics — and the physics was not the point. Impacts
+against the glass are now silent (`SND.wall`), which is a decision rather than a measurement, and it is
+worth being clear about which is which: the argument below is what it costs, not a reason it should not
+have been done.
+
+At the default 30 marbles the wall takes 90 impacts a second against 37 between marbles, so this removes
+roughly two thirds of the events, and at 2–10 marbles it leaves the page nearly silent exactly where each
+collision is most clearly visible. What it buys is that every click is two marbles meeting, and all three
+voices a frame go to them instead of one in six:
+
+| configuration | voices/s, both | voices/s, marbles only |
+| --- | --- | --- |
+| 30, zero g | 114.4 | 35.4 |
+| 30, gravity | 168.9 | 92.9 |
+| 200, packed | 180 (cap) | 180 (cap) |
+
+The skip happens at the source, in `solveWall`, not at playback. That matters: filtering at playback
+still lets wall impacts consume queue slots and then discards them, which cost 26 marble clicks a second
+at 30 with gravity — 68 against the 92.9 above. The wall impact is still *counted*, because the impacts
+readout is about the physics rather than about the sound.
+
+The path is kept behind the flag rather than deleted, so bringing it back is one word and the glass
+timbre — a triangle wave, 1.6× the pitch, a longer decay — does not have to be rebuilt. `SND.pairScale`
+stays for the same reason: with one kind of impact its normalisation is a no-op, and it is correct again
+the moment there are two.
 
 ### What "off" has to mean
 

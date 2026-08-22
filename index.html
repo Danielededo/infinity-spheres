@@ -1308,8 +1308,21 @@ const SND = {
   rRef: 0.85,          // the middle of the default radius range
   fMax: 2600,          // small marbles at small sizeScale would otherwise pierce
   floor: 0.04,         // impulses below this share of the reference are silent
+  /* Do impacts against the glass make a sound? They did, and they no longer do,
+   * by decision rather than by measurement — the mix that follows the physics is
+   * not the mix that is nicer to listen to, and which of those matters is the
+   * author's call. What it costs is worth stating plainly: at the default 30
+   * marbles the wall is 90 impacts a second against 37 between marbles, so this
+   * removes about two thirds of the events, and at 2-10 marbles it leaves the
+   * page nearly silent exactly where each collision is most clearly visible.
+   * What it buys is that every click you hear is two marbles meeting, and the
+   * three voices a frame all go to them instead of one in six.
+   *
+   * The wall path is kept intact behind this rather than deleted, so it is one
+   * word to bring back and the glass timbre does not have to be rebuilt. */
+  wall: false,
   decayMarble: 0.075,  // seconds; a marble is a short, dead click
-  decayGlass: 0.16,    // the tube rings longer and brighter
+  decayGlass: 0.16,    // the tube rings longer and brighter, when it speaks
   /* The enable confirmation, which is deliberately not an impact — held long
    * enough and loud enough for a small speaker to reproduce. See audioConfirm
    * for why an impact voice was the wrong tool for that job. */
@@ -2473,7 +2486,9 @@ function solveWall() {
       m.vel.y -= (1 + e) * vn * ny;
       m.vel.z -= (1 + e) * vn * nz;
       wallHits++;
-      if (state.sound) noteImpact(m.m * (1 + e) * vn, m.r, 1);
+      // Silent by default; see SND.wall. Still counted, because the impacts
+      // readout is about the physics rather than about the sound.
+      if (state.sound && SND.wall) noteImpact(m.m * (1 + e) * vn, m.r, 1);
     }
     p.set(n.qx + nx * limit, n.qy + ny * limit, n.qz + nz * limit);
   }
