@@ -329,7 +329,7 @@
     <button id="btn-quality" aria-pressed="false">Quality: high</button>
   </div>
   <div class="btns">
-    <button id="btn-sound" aria-pressed="false">Sound</button>
+    <button id="btn-sound" aria-pressed="false">Sound: off</button>
   </div>
 
   <details class="more">
@@ -1485,12 +1485,30 @@ function playImpacts() {
   sndN = 0;
 }
 
-/** Enable or disable, building the graph the first time. */
+/** Enable or disable, building the graph the first time.
+ *
+ *  Enabling plays one deliberate click, and that is not decoration. Without it
+ *  "the sound is off", "the sound is broken" and "nothing loud is happening
+ *  this instant" are indistinguishable from the outside — there is no way to
+ *  tell whether the feature works, only whether you happen to be hearing
+ *  something. One guaranteed click on enable makes it a single yes-or-no test:
+ *  hear it and the audio path is fine, so any later silence is about the
+ *  simulation; hear nothing and the problem is the browser, the device or the
+ *  volume, and nothing in this file will fix it.
+ *
+ *  Scheduled after resume() settles rather than immediately. The context clock
+ *  does not advance while suspended, so a voice scheduled against currentTime
+ *  before the resume completes can be left behind. Promise.resolve wraps it
+ *  because resume() has not always returned one. */
 function setSound(on) {
   state.sound = on;
   if (on) {
     if (!audio && !audioInit()) { state.sound = false; return; }
-    audio.resume();
+    Promise.resolve(audio.resume()).then(() => {
+      if (!state.sound) return;               // turned off again in the meantime
+      audioVoice(audio, { bus: audioBus, noise: audioNoise }, audio.currentTime + 0.02,
+                 SND.fRef, SND.voiceGain, SND.decayGlass, true);
+    }).catch(() => {});
   } else if (audio) {
     audio.suspend();
     sndN = 0;
@@ -2415,6 +2433,9 @@ function syncUI({ rebuild = false } = {}) {
   btn.ride.textContent = state.ride ? 'Stop riding' : 'Ride a marble';
   btn.quality.textContent = `Quality: ${state.quality}`;
   btn.quality.setAttribute('aria-pressed', String(state.quality === 'high'));
+  // Spelled out rather than left to the pressed styling alone: whether the
+  // sound is on is exactly the question someone asks when they hear nothing.
+  btn.sound.textContent = state.sound ? 'Sound: on' : 'Sound: off';
   btn.sound.setAttribute('aria-pressed', String(state.sound));
 
   /* The header names the spine on screen rather than one fixed curve. The glyph

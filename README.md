@@ -86,7 +86,9 @@ Under **more**: six presets, three camera poses, a PNG export, and **Copy link**
 Clicking a marble selects it — the raycast tests only marbles, so you can pick one you can see
 *through* the glass — and **Ride a marble** puts the camera behind it, pointed down the tube.
 
-**Sound** is off until you ask for it, and every click comes from the collision that caused it: the
+**Sound** is off until you ask for it, and turning it on plays one deliberate click straight away — so
+"it is off", "it is broken" and "nothing loud is happening right now" are three answers rather than one
+silence. After that, every click comes from the collision that caused it: the
 impulse the solver already computed sets how loud it is, and the marble's radius sets the pitch, because
 a sphere's ringing modes go as 1/r. Small marbles tick, large ones knock. It is synthesised, so there
 are no audio files — and it is the one control deliberately kept out of the URL hash, so a shared link

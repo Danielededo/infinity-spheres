@@ -386,6 +386,24 @@ as `1/r` — so over the 0.55–1.15 radius range the small marbles tick and the
 octave apart. Everything is synthesised: samples would mean asset files, and this page is one file with
 no build step.
 
+### Knowing whether it works at all
+
+Enabling plays one deliberate click before any impact has happened, and that is not decoration. Without
+it, "the sound is off", "the sound is broken" and "nothing loud is happening this instant" are
+indistinguishable from outside: there is no way to tell whether the feature works, only whether you
+happen to be hearing something. One guaranteed click makes it a single yes-or-no test — hear it and the
+audio path is fine, so any later silence is about the simulation; hear nothing and the problem is the
+browser, the device or the volume, and nothing in the page will fix it. The button says `Sound: on` or
+`Sound: off` in words for the same reason.
+
+It is scheduled after `resume()` settles rather than immediately: the context clock does not advance
+while suspended, so a voice scheduled against `currentTime` before the resume completes can be left
+behind.
+
+This was added after three rounds of "I hear nothing" that could not be diagnosed from either end. The
+code was correct throughout — voices per frame measured 1.25 to 2.46 across viewports, exactly as
+designed — and being correct turned out to be no help at all without a way to observe it.
+
 ### The rate problem
 
 The interesting constraint is how many impacts there are, which was measured rather than guessed —
